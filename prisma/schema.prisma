@@ -1,0 +1,529 @@
+// prisma/schema.prisma
+// TB DARVINKS — Complete Schema (All Phases)
+// ORM: Prisma | DB: Neon (PostgreSQL)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// ENUMS
+// ═════════════════════════════════════════════════════════════════════════════
+
+enum UserTier {
+  TIER1
+  TIER2
+  TIER3
+  TIER4
+  TIER5_SALES_HEAD
+  TIER5_SYSTEM_ADMIN
+  TIER5_WAREHOUSE
+  TIER6_GM
+}
+
+enum Team {
+  BRIGHT
+  RADIANT
+}
+
+enum Region {
+  NORTH_BRIGHT
+  SS1
+  SS2
+  SS3
+  SE1
+  LAGOS_1
+  LAGOS_2
+  NORTH_CENTRAL
+  NORTH_WEST
+  SOUTH_WEST
+  MODERN_TRADE
+}
+
+enum AttendanceType {
+  CLOCK_IN
+  CLOCK_OUT
+  KD_VISIT
+}
+
+enum AttendanceFlag {
+  ON_TIME
+  LATE
+  MISSED
+  OUTSIDE_WINDOW
+}
+
+enum ProductCategory {
+  CREAM
+  SOAP
+  LOTION
+  MAINTENANCE
+}
+
+enum LotionUnit {
+  PIECE
+  ROW
+  CARTON
+}
+
+enum WarehouseLocation {
+  LAGOS_HQ
+  ONITSHA
+  KANO
+}
+
+enum StockMovementType {
+  INBOUND
+  OUTBOUND_PO
+  ADJUSTMENT
+}
+
+enum PurchaseOrderStatus {
+  PENDING_APPROVAL
+  APPROVED
+  PAYMENT_RECEIVED
+  DO_UPLOADED
+  DELIVERED
+  FULLY_PAID
+  DEFAULTED
+  CANCELLED
+}
+
+enum InvoiceQualification {
+  PENDING
+  QUALIFIED
+  NOT_QUALIFIED
+}
+
+enum PaymentMode {
+  CASH
+  TRANSFER
+  CHEQUE
+}
+
+enum BuyerType {
+  SUB_DISTRIBUTOR
+  WHOLESALER
+  RETAILER
+}
+
+enum CompetitorReportMediaType {
+  PDF
+  IMAGE
+  VIDEO
+  TEXT
+}
+
+enum NotificationChannel {
+  FCM
+  EMAIL
+  IN_APP
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+enum ApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PHASE 1 — AUTH, USERS, ATTENDANCE
+// ═════════════════════════════════════════════════════════════════════════════
+
+model User {
+  id                String             @id @default(uuid())
+  employeeRef       String             @unique
+  fullName          String
+  email             String             @unique
+  phone             String             @unique
+  passwordHash      String
+  tier              UserTier
+  team              Team
+  region            Region
+  state             String
+  dateOfBirth       DateTime
+  profilePictureUrl String?
+  idCardUrl         String?
+  isActive          Boolean            @default(true)
+  fcmToken          String?
+  annualTargets     Json               @default("{}")
+  warehouseLocation WarehouseLocation?
+  createdAt         DateTime           @default(now())
+  updatedAt         DateTime           @updatedAt
+
+  // Relations
+  refreshTokens           RefreshToken[]
+  attendanceEvents        AttendanceEvent[]
+  purchaseOrdersCreated   PurchaseOrder[]      @relation("POCreatedBy")
+  purchaseOrdersApproved  PurchaseOrder[]      @relation("POApprovedBy")
+  purchaseOrdersDelivered PurchaseOrder[]      @relation("PODeliveredBy")
+  collections             Collection[]
+  secondarySales          SecondarySale[]
+  competitorReports       CompetitorReport[]
+  notifications           Notification[]
+  outOfRegionRequests     OutOfRegionRequest[] @relation("OORRequestedBy")
+  outOfRegionApprovals    OutOfRegionRequest[] @relation("OORApprovedBy")
+  stockMovements          StockMovement[]      @relation("StockMovedBy")
+  stockAdjustments        StockMovement[]      @relation("StockAdjustedBy")
+  // ↓ Back-relation for Customer.owner (fixes validation error 1)
+  ownedCustomers          Customer[]           @relation("CustomerOwner")
+
+  @@index([tier])
+  @@index([team])
+  @@index([region])
+  @@index([email])
+  @@index([isActive])
+}
+
+model RefreshToken {
+  id         String   @id @default(uuid())
+  tokenHash  String   @unique
+  userId     String
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  expiresAt  DateTime
+  isRevoked  Boolean  @default(false)
+  createdAt  DateTime @default(now())
+  replacedBy String?
+
+  @@index([userId])
+  @@index([tokenHash])
+  @@index([expiresAt])
+}
+
+model AttendanceEvent {
+  id          String         @id @default(uuid())
+  userId      String
+  user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  type        AttendanceType
+  flag        AttendanceFlag @default(ON_TIME)
+  photoUrl    String
+  latitude    Float
+  longitude   Float
+  address     String?
+  deviceTime  DateTime
+  serverTime  DateTime       @default(now())
+  kdAccountId String?
+  kdAccount   Customer?      @relation(fields: [kdAccountId], references: [id])
+  note        String?
+
+  @@index([userId, serverTime])
+  @@index([userId, deviceTime])
+  @@index([type])
+  @@index([flag])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PHASE 2 — PRODUCTS & SKU CATALOGUE
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Product {
+  id              String          @id @default(uuid())
+  name            String
+  category        ProductCategory
+  packQty         Int
+  unitPriceKobo   Int
+  cartonPriceKobo Int
+  isActive        Boolean         @default(true)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  // Relations
+  stockEntries       StockEntry[]
+  purchaseOrderItems PurchaseOrderItem[]
+  secondarySaleItems SecondarySaleItem[]
+  // ↓ Back-relation for StockMovement.product (fixes validation error 2)
+  stockMovements     StockMovement[]     @relation("ProductStockMovements")
+
+  @@unique([name, category])
+  @@index([category])
+  @@index([isActive])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PHASE 2 — CUSTOMERS (KEY DISTRIBUTORS)
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Customer {
+  id              String   @id @default(uuid())
+  businessName    String
+  address         String
+  mobilePhone     String
+  whatsApp        String?
+  email           String?
+  cacNumber       String?
+  contactPerson   String
+  contactPhone    String
+  contactPosition String?
+  region          Region
+  state           String
+  isActive        Boolean  @default(true)
+  balanceKobo     Int      @default(0)
+  ownerId         String
+  // Named relation to match back-relation on User
+  owner           User     @relation("CustomerOwner", fields: [ownerId], references: [id])
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  purchaseOrders      PurchaseOrder[]
+  collections         Collection[]
+  attendanceVisits    AttendanceEvent[]
+  outOfRegionRequests OutOfRegionRequest[]
+
+  @@index([ownerId])
+  @@index([region])
+  @@index([balanceKobo])
+}
+
+model OutOfRegionRequest {
+  id          String         @id @default(uuid())
+  customerId  String
+  customer    Customer       @relation(fields: [customerId], references: [id])
+  requestedBy String
+  requester   User           @relation("OORRequestedBy", fields: [requestedBy], references: [id])
+  approvedBy  String?
+  approver    User?          @relation("OORApprovedBy", fields: [approvedBy], references: [id])
+  status      ApprovalStatus @default(PENDING)
+  note        String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+
+  @@index([customerId])
+  @@index([status])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PHASE 2 — WAREHOUSE
+// ═════════════════════════════════════════════════════════════════════════════
+
+model StockEntry {
+  id                String            @id @default(uuid())
+  warehouseLocation WarehouseLocation
+  productId         String
+  product           Product           @relation(fields: [productId], references: [id])
+  quantityCartons   Int               @default(0)
+  lowStockThreshold Int               @default(10)
+  updatedAt         DateTime          @updatedAt
+
+  @@unique([warehouseLocation, productId])
+  @@index([warehouseLocation])
+  @@index([quantityCartons])
+}
+
+model StockMovement {
+  id                String            @id @default(uuid())
+  warehouseLocation WarehouseLocation
+  productId         String
+  // Named relation to match back-relation on Product
+  product           Product           @relation("ProductStockMovements", fields: [productId], references: [id])
+  type              StockMovementType
+  quantityCartons   Int
+  batchReference    String?
+  reasonNote        String?
+  purchaseOrderId   String?
+  purchaseOrder     PurchaseOrder?    @relation(fields: [purchaseOrderId], references: [id])
+  recordedById      String
+  recordedBy        User              @relation("StockMovedBy", fields: [recordedById], references: [id])
+  adjustedById      String?
+  adjustedBy        User?             @relation("StockAdjustedBy", fields: [adjustedById], references: [id])
+  createdAt         DateTime          @default(now())
+
+  @@index([warehouseLocation, createdAt])
+  @@index([productId])
+  @@index([type])
+  @@index([purchaseOrderId])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PHASE 2 — PURCHASE ORDERS
+// ═════════════════════════════════════════════════════════════════════════════
+
+model PurchaseOrder {
+  id                   String               @id @default(uuid())
+  orderRef             String               @unique
+  customerId           String
+  customer             Customer             @relation(fields: [customerId], references: [id])
+  warehouseLocation    WarehouseLocation
+  status               PurchaseOrderStatus  @default(PENDING_APPROVAL)
+  qualification        InvoiceQualification @default(PENDING)
+  subtotalKobo         Int
+  creditAppliedKobo    Int                  @default(0)
+  totalKobo            Int
+  paidKobo             Int                  @default(0)
+  cashDiscountKobo     Int                  @default(0)
+  incentiveKobo        Int                  @default(0)
+  kdInvoiceUrl         String?
+  chequeUrl            String?
+  formalInvoiceUrl     String?
+  deliveryOrderUrl     String?
+  invoiceMismatch      Json?
+  createdById          String
+  createdBy            User                 @relation("POCreatedBy", fields: [createdById], references: [id])
+  approvedById         String?
+  approvedBy           User?                @relation("POApprovedBy", fields: [approvedById], references: [id])
+  deliveredById        String?
+  deliveredBy          User?                @relation("PODeliveredBy", fields: [deliveredById], references: [id])
+  approvedAt           DateTime?
+  deliveredAt          DateTime?
+  paymentDeadline      DateTime?
+  fullyPaidAt          DateTime?
+  note                 String?
+  createdAt            DateTime             @default(now())
+  updatedAt            DateTime             @updatedAt
+
+  // Relations
+  items          PurchaseOrderItem[]
+  payments       PaymentRecord[]
+  stockMovements StockMovement[]
+
+  @@index([customerId])
+  @@index([status])
+  @@index([qualification])
+  @@index([warehouseLocation])
+  @@index([createdById])
+  @@index([paymentDeadline])
+  @@index([createdAt])
+}
+
+model PurchaseOrderItem {
+  id              String        @id @default(uuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product       @relation(fields: [productId], references: [id])
+  quantityCartons Int
+  unitPriceKobo   Int
+  lineTotalKobo   Int
+
+  @@index([purchaseOrderId])
+  @@index([productId])
+}
+
+model PaymentRecord {
+  id              String        @id @default(uuid())
+  purchaseOrderId String
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  amountKobo      Int
+  paymentMode     PaymentMode
+  proofUrl        String?
+  note            String?
+  createdAt       DateTime      @default(now())
+
+  @@index([purchaseOrderId])
+  @@index([createdAt])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PHASE 2 — COLLECTIONS
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Collection {
+  id            String      @id @default(uuid())
+  customerId    String
+  customer      Customer    @relation(fields: [customerId], references: [id])
+  recordedById  String
+  recordedBy    User        @relation(fields: [recordedById], references: [id])
+  receiptUrl    String
+  amountKobo    Int
+  paymentMode   PaymentMode
+  depositorName String
+  location      String
+  collectedAt   DateTime
+  note          String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  @@index([customerId])
+  @@index([recordedById])
+  @@index([collectedAt])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PHASE 3 — SECONDARY SALES
+// ═════════════════════════════════════════════════════════════════════════════
+
+model SecondarySale {
+  id          String            @id @default(uuid())
+  userId      String
+  user        User              @relation(fields: [userId], references: [id])
+  kdAccountId String
+  latitude    Float
+  longitude   Float
+  deviceTime  DateTime
+  serverTime  DateTime          @default(now())
+  note        String?
+  createdAt   DateTime          @default(now())
+  items       SecondarySaleItem[]
+
+  @@index([userId, deviceTime])
+  @@index([kdAccountId])
+}
+
+model SecondarySaleItem {
+  id              String        @id @default(uuid())
+  secondarySaleId String
+  secondarySale   SecondarySale @relation(fields: [secondarySaleId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product       @relation(fields: [productId], references: [id])
+  buyerType       BuyerType
+  quantityCartons Int           @default(0)
+  quantityRows    Int           @default(0)
+  quantityPieces  Int           @default(0)
+
+  @@index([secondarySaleId])
+  @@index([productId])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PHASE 3 — COMPETITOR REPORTS
+// ═════════════════════════════════════════════════════════════════════════════
+
+model CompetitorReport {
+  id            String                    @id @default(uuid())
+  submittedById String
+  submittedBy   User                      @relation(fields: [submittedById], references: [id])
+  region        Region
+  state         String?
+  mediaType     CompetitorReportMediaType
+  mediaUrl      String?
+  textContent   String?
+  tags          String[]
+  createdAt     DateTime                  @default(now())
+
+  @@index([submittedById])
+  @@index([region])
+  @@index([createdAt])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PHASE 4 — NOTIFICATIONS LOG
+// ═════════════════════════════════════════════════════════════════════════════
+
+model Notification {
+  id         String              @id @default(uuid())
+  userId     String
+  user       User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  channel    NotificationChannel
+  status     NotificationStatus  @default(PENDING)
+  title      String
+  body       String
+  payload    Json                @default("{}")
+  sentAt     DateTime?
+  failReason String?
+  createdAt  DateTime            @default(now())
+
+  @@index([userId, createdAt])
+  @@index([status])
+  @@index([channel])
+}
