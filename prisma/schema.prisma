@@ -8,7 +8,6 @@ generator client {
 
 datasource db {
   provider = "postgresql"
-
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -24,6 +23,24 @@ enum UserTier {
   TIER5_SYSTEM_ADMIN
   TIER5_WAREHOUSE
   TIER6_GM
+}
+
+// Roles shown in the registration UI dropdown.
+// The system derives UserTier from this automatically — clients never send a tier.
+enum UserRole {
+  MERCHANDISER
+  PROMOTER
+  DBSR
+  VSR
+  SALES_REPRESENTATIVE
+  SSR
+  ATSM
+  TSM
+  ZONAL_SALES_MANAGER
+  SALES_HEAD
+  SYSTEM_ADMIN
+  WAREHOUSE_ADMIN
+  GENERAL_MANAGER
 }
 
 enum Team {
@@ -148,7 +165,9 @@ model User {
   email             String             @unique
   phone             String             @unique
   passwordHash      String
-  tier              UserTier
+  role              UserRole                        // User-selected role from registration dropdown
+  roleLabel         String                          // Human-readable label stored for ID card e.g. "Merchandiser"
+  tier              UserTier                        // Auto-derived from role — never sent by client
   team              Team
   region            Region
   state             String
@@ -176,10 +195,10 @@ model User {
   outOfRegionApprovals    OutOfRegionRequest[] @relation("OORApprovedBy")
   stockMovements          StockMovement[]      @relation("StockMovedBy")
   stockAdjustments        StockMovement[]      @relation("StockAdjustedBy")
-  // ↓ Back-relation for Customer.owner (fixes validation error 1)
   ownedCustomers          Customer[]           @relation("CustomerOwner")
 
   @@index([tier])
+  @@index([role])
   @@index([team])
   @@index([region])
   @@index([email])
@@ -238,11 +257,9 @@ model Product {
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
-  // Relations
   stockEntries       StockEntry[]
   purchaseOrderItems PurchaseOrderItem[]
   secondarySaleItems SecondarySaleItem[]
-  // ↓ Back-relation for StockMovement.product (fixes validation error 2)
   stockMovements     StockMovement[]     @relation("ProductStockMovements")
 
   @@unique([name, category])
@@ -270,12 +287,10 @@ model Customer {
   isActive        Boolean  @default(true)
   balanceKobo     Int      @default(0)
   ownerId         String
-  // Named relation to match back-relation on User
   owner           User     @relation("CustomerOwner", fields: [ownerId], references: [id])
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  // Relations
   purchaseOrders      PurchaseOrder[]
   collections         Collection[]
   attendanceVisits    AttendanceEvent[]
@@ -325,7 +340,6 @@ model StockMovement {
   id                String            @id @default(uuid())
   warehouseLocation WarehouseLocation
   productId         String
-  // Named relation to match back-relation on Product
   product           Product           @relation("ProductStockMovements", fields: [productId], references: [id])
   type              StockMovementType
   quantityCartons   Int
@@ -382,7 +396,6 @@ model PurchaseOrder {
   createdAt            DateTime             @default(now())
   updatedAt            DateTime             @updatedAt
 
-  // Relations
   items          PurchaseOrderItem[]
   payments       PaymentRecord[]
   stockMovements StockMovement[]
@@ -454,16 +467,16 @@ model Collection {
 // ═════════════════════════════════════════════════════════════════════════════
 
 model SecondarySale {
-  id          String            @id @default(uuid())
+  id          String              @id @default(uuid())
   userId      String
-  user        User              @relation(fields: [userId], references: [id])
+  user        User                @relation(fields: [userId], references: [id])
   kdAccountId String
   latitude    Float
   longitude   Float
   deviceTime  DateTime
-  serverTime  DateTime          @default(now())
+  serverTime  DateTime            @default(now())
   note        String?
-  createdAt   DateTime          @default(now())
+  createdAt   DateTime            @default(now())
   items       SecondarySaleItem[]
 
   @@index([userId, deviceTime])

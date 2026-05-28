@@ -1,8 +1,8 @@
-
+// src/modules/tokens/token.service.ts
 // Manages refresh token lifecycle:
 //  - Persists hashed tokens in PostgreSQL (full audit trail)
-//  - Uses Redis to blacklist revoked tokens for fast O(1) lookups
-//  - Implements refresh token rotation (old token → new token)
+//  - Implements refresh token rotation (old token invalidated on every use)
+//  - Token reuse detection: if a revoked token is reused, all user tokens revoked
 
 import {
   Injectable,
@@ -13,14 +13,12 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
+import type { SignOptions } from 'jsonwebtoken';
 import * as bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { PrismaService } from '../../common/prisma/prisma.service';
 import type { AppConfig, JwtConfig } from '../../common/config/app.config';
-import type { JwtPayload } from '@modules/auth/strategies/jwt.strategy';
-
-const REFRESH_BLACKLIST_KEY = (tokenId: string) =>
-  `blacklist:refresh:${tokenId}`;
+import type { JwtPayload } from '../../modules/auths/strategies/jwt.strategies';
 
 @Injectable()
 export class TokenService {
@@ -36,26 +34,47 @@ export class TokenService {
     this.jwtCfg = this.config.get<JwtConfig>('jwt')!;
   }
 
-  /** Signs a short-lived access token. */
+  //Access Token
+
+  /**
+   * Signs a short-lived access token.
+   *
+   * Fix: @nestjs/jwt v11 uses the `ms` library's branded `StringValue` type
+   * for expiresIn. Casting through `SignOptions` from `jsonwebtoken` (which
+   * types expiresIn as `string | number`) resolves the overload mismatch
+   * without losing type safety elsewhere.
+   */
   signAccessToken(payload: JwtPayload): string {
-    return this.jwt.sign(payload, {
+    const options: SignOptions = {
       secret: this.jwtCfg.accessSecret,
       expiresIn: this.jwtCfg.accessExpiry,
-    });
+    } as SignOptions;
+
+    return this.jwt.sign(payload as object, options as any);
   }
 
-  /** Signs a long-lived refresh token and persists a hash to the DB. */
+  // Refresh Token
+
+  /**
+   * Signs a long-lived refresh token and persists a bcrypt hash to the DB.
+   * The raw token is returned once and never stored in plain form.
+   */
   async createRefreshToken(
     userId: string,
     payload: JwtPayload,
   ): Promise<string> {
     const tokenId = uuidv4();
+
+    const options: SignOptions = {
+      expiresIn: this.jwtCfg.refreshExpiry,
+    } as SignOptions;
+
     const rawToken = this.jwt.sign(
-      { ...payload, jti: tokenId },
+      { ...(payload as object), jti: tokenId } as object,
       {
+        ...options,
         secret: this.jwtCfg.refreshSecret,
-        expiresIn: this.jwtCfg.refreshExpiry,
-      },
+      } as any,
     );
 
     const rounds = this.config.get<number>('bcryptRounds') ?? 12;
@@ -72,13 +91,18 @@ export class TokenService {
     return rawToken;
   }
 
+  // Rotation
+
   /**
    * Rotates a refresh token:
-   * 1. Verifies the incoming token (signature + expiry)
-   * 2. Checks the DB record exists and is not revoked
-   * 3. Verifies the hash matches
+   * 1. Verifies JWT signature + expiry
+   * 2. Looks up the DB record — must exist and not be revoked
+   * 3. Verifies bcrypt hash matches (tamper detection)
    * 4. Revokes the old token
-   * 5. Issues a new access + refresh token pair
+   * 5. Issues a fresh access + refresh pair
+   *
+   * Token reuse detection: if a revoked token is presented again,
+   * ALL tokens for that user are revoked (possible account compromise).
    */
   async rotateRefreshToken(rawToken: string): Promise<{
     accessToken: string;
@@ -99,15 +123,19 @@ export class TokenService {
       where: { id: decoded.jti },
     });
 
-    if (!record || record.isRevoked || record.expiresAt < new Date()) {
-      // Possible token reuse — revoke all tokens for this user (security measure)
-      if (record && record.isRevoked) {
-        this.logger.warn(
-          `Refresh token reuse detected for user ${decoded.sub} — revoking all tokens`,
-        );
-        await this.revokeAllForUser(decoded.sub);
-      }
+    if (!record || record.expiresAt < new Date()) {
       throw new UnauthorizedException('Refresh token is no longer valid');
+    }
+
+    if (record.isRevoked) {
+      // Token reuse — revoke all tokens for this user (security measure)
+      this.logger.warn(
+        `Refresh token reuse detected for user ${decoded.sub} — revoking all sessions`,
+      );
+      await this.revokeAllForUser(decoded.sub);
+      throw new UnauthorizedException(
+        'Session invalidated due to suspicious activity. Please log in again.',
+      );
     }
 
     const isMatch = await bcrypt.compare(rawToken, record.tokenHash);
@@ -115,13 +143,13 @@ export class TokenService {
       throw new UnauthorizedException('Refresh token integrity check failed');
     }
 
-    // Revoke the old token
+    // Revoke the consumed token
     await this.prisma.refreshToken.update({
       where: { id: record.id },
       data: { isRevoked: true },
     });
 
-    // Issue a fresh pair
+    // Issue fresh pair
     const payload: JwtPayload = {
       sub: decoded.sub,
       email: decoded.email,
@@ -129,19 +157,17 @@ export class TokenService {
       team: decoded.team,
     };
 
-    const accessToken = this.signAccessToken(payload);
-    const refreshToken = await this.createRefreshToken(decoded.sub, payload);
-
-    // Update rotation chain
-    await this.prisma.refreshToken.update({
-      where: { id: record.id },
-      data: { replacedBy: (await this.getLatestTokenId(decoded.sub)) ?? undefined },
-    });
+    const [accessToken, refreshToken] = await Promise.all([
+      this.signAccessToken(payload),
+      this.createRefreshToken(decoded.sub, payload),
+    ]);
 
     return { accessToken, refreshToken, payload };
   }
 
-  /** Revokes a specific refresh token (logout). */
+  // Revocation
+
+  /** Revokes a specific refresh token (single-device logout). */
   async revokeToken(rawToken: string): Promise<void> {
     try {
       const decoded = this.jwt.verify(rawToken, {
@@ -153,11 +179,14 @@ export class TokenService {
         data: { isRevoked: true },
       });
     } catch {
-      // Token already expired or invalid — nothing to revoke
+      // Token already expired or invalid — nothing to revoke, not an error
     }
   }
 
-  /** Revokes all active refresh tokens for a user (e.g. password change, security incident). */
+  /**
+   * Revokes all active refresh tokens for a user.
+   * Called on: password change, security incident, token reuse detection.
+   */
   async revokeAllForUser(userId: string): Promise<void> {
     await this.prisma.refreshToken.updateMany({
       where: { userId, isRevoked: false },
@@ -165,7 +194,7 @@ export class TokenService {
     });
   }
 
-  /** Cleans up expired refresh tokens older than 60 days (call via cron). */
+  /** Purges expired tokens older than 60 days. Call via a scheduled cron job. */
   async purgeExpiredTokens(): Promise<number> {
     const cutoff = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
     const { count } = await this.prisma.refreshToken.deleteMany({
@@ -174,26 +203,30 @@ export class TokenService {
     return count;
   }
 
-  // Helpers
+  //  Private helpers
 
-  private async getLatestTokenId(userId: string): Promise<string | null> {
-    const latest = await this.prisma.refreshToken.findFirst({
-      where: { userId, isRevoked: false },
-      orderBy: { createdAt: 'desc' },
-      select: { id: true },
-    });
-    return latest?.id ?? null;
-  }
-
+  /**
+   * Parses a duration string like '30d', '12h', '60m' into milliseconds.
+   * Only used internally to calculate refresh token expiresAt.
+   */
   private parseDurationMs(duration: string): number {
-    const unit = duration.slice(-1);
+    const unit = duration.slice(-1).toLowerCase();
     const value = parseInt(duration.slice(0, -1), 10);
-    const units: Record<string, number> = {
-      s: 1000,
+
+    const unitMap: Record<string, number> = {
+      s: 1_000,
       m: 60_000,
       h: 3_600_000,
       d: 86_400_000,
     };
-    return (units[unit] ?? 3_600_000) * value;
+
+    if (isNaN(value) || !(unit in unitMap)) {
+      this.logger.warn(
+        `Unrecognised duration format "${duration}" — defaulting to 30 days`,
+      );
+      return 30 * 86_400_000;
+    }
+
+    return unitMap[unit] * value;
   }
 }

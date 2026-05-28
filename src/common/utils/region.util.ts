@@ -1,5 +1,5 @@
 // Maps Nigerian state names to TB DARVINKS regions.
-// Used at registration to auto-assign a user's region from their state.
+// Region display labels use the exact names from the PRD.
 
 import { Region, Team } from '@prisma/client';
 
@@ -17,7 +17,7 @@ const BRIGHT_STATE_MAP: StateRegionMap = {
     'akwa ibom': Region.SS1,
     // SS2
     imo: Region.SS2,
-    'rivers': Region.SS2,
+    rivers: Region.SS2,
     bayelsa: Region.SS2,
     // SS3
     delta: Region.SS3,
@@ -29,20 +29,16 @@ const BRIGHT_STATE_MAP: StateRegionMap = {
 };
 
 const RADIANT_STATE_MAP: StateRegionMap = {
-    // Lagos sub-regions — further split by the user's LGA/area at registration
-    lagos: Region.LAGOS_2, // default; override to LAGOS_1 for Trade Fair area
-    // North Central
-    'fct': Region.NORTH_CENTRAL,
+    lagos: Region.LAGOS_2,
+    fct: Region.NORTH_CENTRAL,
     abuja: Region.NORTH_CENTRAL,
     nasarawa: Region.NORTH_CENTRAL,
     niger: Region.NORTH_CENTRAL,
     plateau: Region.NORTH_CENTRAL,
     kwara: Region.NORTH_CENTRAL,
-    // North West
     kano: Region.NORTH_WEST,
     kaduna: Region.NORTH_WEST,
     sokoto: Region.NORTH_WEST,
-    // South West
     oyo: Region.SOUTH_WEST,
     ogun: Region.SOUTH_WEST,
     osun: Region.SOUTH_WEST,
@@ -51,27 +47,37 @@ const RADIANT_STATE_MAP: StateRegionMap = {
 };
 
 /**
- * Resolves a Region from a state name and team.
- * Falls back to a sensible default if the state isn't explicitly mapped.
- * Modern Trade is a channel, not a geographic region — assigned explicitly.
+ * Region display labels — exact names from the PRD §7.
+ * Used on the ID card and in all UI-facing responses.
  */
+export const REGION_DISPLAY_LABEL: Record<Region, string> = {
+    [Region.NORTH_BRIGHT]: 'North Bright',
+    [Region.SS1]: 'SS1',
+    [Region.SS2]: 'SS2',
+    [Region.SS3]: 'SS3',
+    [Region.SE1]: 'SE1',
+    [Region.LAGOS_1]: 'Lagos 1',
+    [Region.LAGOS_2]: 'Lagos 2',
+    [Region.NORTH_CENTRAL]: 'North Central',
+    [Region.NORTH_WEST]: 'North West',
+    [Region.SOUTH_WEST]: 'South West',
+    [Region.MODERN_TRADE]: 'Modern Trade',
+};
+
+/** Resolves a Region from a state name and team. */
 export function resolveRegion(state: string, team: Team): Region {
     const normalized = state.trim().toLowerCase();
-
     if (team === Team.BRIGHT) {
         return BRIGHT_STATE_MAP[normalized] ?? Region.NORTH_BRIGHT;
     }
-
     return RADIANT_STATE_MAP[normalized] ?? Region.NORTH_CENTRAL;
 }
 
 /**
- * Generates a human-readable employee reference code.
- * Format: DRV-{TEAM_PREFIX}-{zero-padded sequence}
- * e.g. DRV-BRT-0042, DRV-RAD-0007
+ * Generates a Darvinks employee reference code.
+ * Format: Dar-{8-digit zero-padded sequence}
+ * e.g. Dar-00000001, Dar-00012345
  */
-export function generateEmployeeRef(team: Team, sequence: number): string {
-    const prefix = team === Team.BRIGHT ? 'BRT' : 'RAD';
-    const seq = String(sequence).padStart(4, '0');
-    return `DRV-${prefix}-${seq}`;
+export function generateEmployeeRef(sequence: number): string {
+    return `Dar-${String(sequence).padStart(8, '0')}`;
 }
