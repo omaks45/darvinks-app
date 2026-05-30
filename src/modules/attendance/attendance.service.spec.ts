@@ -1,4 +1,3 @@
-import type { File as MulterFile } from 'multer';
 // src/modules/attendance/attendance.service.spec.ts
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
@@ -7,7 +6,7 @@ import { getQueueToken } from '@nestjs/bull';
 import { AttendanceService } from './attendance.service';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { CloudinaryService } from '@modules/cloudinary/cloudinary.service';
-import type { JwtPayload } from '@modules/auth/strategies/jwt.strategy';
+import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type { ClockEventDto, KdVisitDto, OfflineSyncItemDto } from './dto/clock-event.dto';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
@@ -28,13 +27,13 @@ const mockQueue = { add: jest.fn() };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function makePhoto(): MulterFile {
+function makePhoto(): Express.Multer.File {
   return {
     buffer: Buffer.from('fake-image-data'),
     mimetype: 'image/jpeg',
     originalname: 'photo.jpg',
     size: 1024,
-  } as MulterFile;
+  } as Express.Multer.File;
 }
 
 function makeRequester(
@@ -230,10 +229,12 @@ describe('AttendanceService', () => {
     });
 
     it('creates clock-out event when clock-in exists and no duplicate', async () => {
-      // 1st findFirst: no clock-out duplicate; 2nd: clock-in exists
+      // Service clockOut() call order:
+      //   1. assertClockInExists   → findFirst for CLOCK_IN  (must return a record)
+      //   2. assertNoDuplicateEvent → findFirst for CLOCK_OUT (must return null)
       mockPrisma.attendanceEvent.findFirst
-        .mockResolvedValueOnce(null)              // no duplicate clock-out
-        .mockResolvedValueOnce({ id: 'clock-in-event' }); // clock-in exists
+        .mockResolvedValueOnce({ id: 'clock-in-event' }) // clock-in exists ✓
+        .mockResolvedValueOnce(null);                    // no duplicate clock-out ✓
 
       mockPrisma.attendanceEvent.create.mockResolvedValue({
         id: 'clock-out-id',

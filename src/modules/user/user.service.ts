@@ -1,4 +1,3 @@
-import type { File as MulterFile } from 'multer';
 // src/modules/users/users.service.ts
 import {
   Injectable,
@@ -8,16 +7,17 @@ import { UserTier } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { CloudinaryService } from '@modules/cloudinary/cloudinary.service';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
-import type { UpdateProfileDto } from '../user/dto/update-profile.dto';
+import type { UpdateProfileDto } from './dto/update-profile.dto';
 
-
-// Fields safe to expose — never include passwordHash
+// Fields safe to expose — passwordHash is never included
 const USER_SAFE_SELECT = {
   id: true,
   employeeRef: true,
   fullName: true,
   email: true,
   phone: true,
+  role: true,
+  roleLabel: true,
   tier: true,
   team: true,
   region: true,
@@ -27,6 +27,8 @@ const USER_SAFE_SELECT = {
   idCardUrl: true,
   annualTargets: true,
   isActive: true,
+  accountOrigin: true,
+  warehouseLocation: true,
   createdAt: true,
   updatedAt: true,
 } as const;
@@ -43,7 +45,6 @@ export class UsersService {
       where: { id },
       select: USER_SAFE_SELECT,
     });
-
     if (!user) throw new NotFoundException('User not found');
     return user;
   }
@@ -55,7 +56,7 @@ export class UsersService {
   async updateProfile(
     userId: string,
     dto: UpdateProfileDto,
-    profilePicture?: MulterFile,
+    profilePicture?: Express.Multer.File,
   ) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId },
@@ -83,7 +84,7 @@ export class UsersService {
     });
   }
 
-  /** Stores the generated ID card URL (called by the ID card job worker). */
+  /** Stores the generated ID card URL — called by the ID card BullMQ worker. */
   async saveIdCardUrl(userId: string, idCardUrl: string): Promise<void> {
     await this.prisma.user.update({
       where: { id: userId },
@@ -92,16 +93,16 @@ export class UsersService {
   }
 
   /**
-   * Returns a list of users visible to the requesting user.
-   * Tier visibility rules:
-   *  - TIER1: own record only
-   *  - TIER2+: same team, lower tiers
-   *  - TIER5 / TIER6_GM: all users
+   * Returns users visible to the requesting user based on tier rules.
+   * TIER1: own record only
+   * TIER2–4: same team, own tier and lower tiers
+   * TIER5 / TIER6_GM: all users across all teams
    */
   async findVisible(requester: JwtPayload) {
     const adminTiers: UserTier[] = [
       UserTier.TIER5_SALES_HEAD,
       UserTier.TIER5_SYSTEM_ADMIN,
+      UserTier.TIER5_WAREHOUSE,
       UserTier.TIER6_GM,
     ];
 
@@ -112,7 +113,6 @@ export class UsersService {
       });
     }
 
-    // Tiers below the requester within the same team
     const visibleTiers = this.getLowerTiers(requester.tier);
     return this.prisma.user.findMany({
       where: {

@@ -3,13 +3,14 @@
 // ORM: Prisma | DB: Neon (PostgreSQL)
 
 generator client {
-  provider = "prisma-client-js"
+  provider   = "prisma-client-js"
+  previewFeatures = ["driverAdapters"]
+
 }
 
 datasource db {
   provider = "postgresql"
 }
-
 // ═════════════════════════════════════════════════════════════════════════════
 // ENUMS
 // ═════════════════════════════════════════════════════════════════════════════
@@ -25,22 +26,34 @@ enum UserTier {
   TIER6_GM
 }
 
-// Roles shown in the registration UI dropdown.
-// The system derives UserTier from this automatically — clients never send a tier.
 enum UserRole {
+  // Tier 1
   MERCHANDISER
   PROMOTER
   DBSR
   VSR
+  // Tier 2
   SALES_REPRESENTATIVE
   SSR
+  // Tier 3
   ATSM
   TSM
+  // Tier 4
   ZONAL_SALES_MANAGER
+  // Tier 5
   SALES_HEAD
   SYSTEM_ADMIN
   WAREHOUSE_ADMIN
+  // Tier 6
   GENERAL_MANAGER
+}
+
+// Describes how an account was created.
+// SELF_REGISTERED — field staff (Tiers 1–4) registered themselves via the app
+// PROVISIONED     — back-office staff created by System Admin via admin panel
+enum AccountOrigin {
+  SELF_REGISTERED
+  PROVISIONED
 }
 
 enum Team {
@@ -154,48 +167,82 @@ enum ApprovalStatus {
   REJECTED
 }
 
+enum TargetPeriod {
+  ANNUAL
+  QUARTERLY
+  MONTHLY
+  WEEKLY
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // PHASE 1 — AUTH, USERS, ATTENDANCE
 // ═════════════════════════════════════════════════════════════════════════════
 
 model User {
-  id                String             @id @default(uuid())
-  employeeRef       String             @unique
+  id                String         @id @default(uuid())
+  employeeRef       String         @unique
   fullName          String
-  email             String             @unique
-  phone             String             @unique
+  email             String         @unique
+  phone             String         @unique
   passwordHash      String
-  role              UserRole                        // User-selected role from registration dropdown
-  roleLabel         String                          // Human-readable label stored for ID card e.g. "Merchandiser"
-  tier              UserTier                        // Auto-derived from role — never sent by client
-  team              Team
-  region            Region
-  state             String
-  dateOfBirth       DateTime
+  role              UserRole
+  roleLabel         String
+  tier              UserTier
+  accountOrigin     AccountOrigin  @default(SELF_REGISTERED)
+  mustChangePassword Boolean       @default(false) // true for provisioned accounts on first login
+
+  // Team — null for SYSTEM_ADMIN, WAREHOUSE_ADMIN, TIER6_GM
+  // Required for all field staff and SALES_HEAD
+  team              Team?
+
+  // Region — null for SALES_HEAD, SYSTEM_ADMIN, WAREHOUSE_ADMIN, TIER6_GM
+  // Auto-assigned from state for field staff (Tiers 1–4)
+  region            Region?
+
+  // State — null for back-office roles (T5 admin, T5 warehouse, T6 GM, T5 sales head)
+  state             String?
+
+  dateOfBirth       DateTime?      // Optional for provisioned back-office accounts
   profilePictureUrl String?
   idCardUrl         String?
-  isActive          Boolean            @default(true)
+  isActive          Boolean        @default(true)
   fcmToken          String?
+
+  // Annual sales targets by SKU category: { "LOTION": 500, "SOAP": 300, ... }
+  // Set at registration; editable by Tier5/System Admin only
   annualTargets     Json               @default("{}")
+
+  // Warehouse Admin scope — only populated for TIER5_WAREHOUSE
   warehouseLocation WarehouseLocation?
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
+
+  // Who provisioned this account (null for self-registered)
+  provisionedById   String?
+  provisionedBy     User?          @relation("ProvisionedBy", fields: [provisionedById], references: [id])
+  provisionedUsers  User[]         @relation("ProvisionedBy")
+
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
 
   // Relations
-  refreshTokens           RefreshToken[]
-  attendanceEvents        AttendanceEvent[]
-  purchaseOrdersCreated   PurchaseOrder[]      @relation("POCreatedBy")
-  purchaseOrdersApproved  PurchaseOrder[]      @relation("POApprovedBy")
-  purchaseOrdersDelivered PurchaseOrder[]      @relation("PODeliveredBy")
-  collections             Collection[]
-  secondarySales          SecondarySale[]
-  competitorReports       CompetitorReport[]
-  notifications           Notification[]
-  outOfRegionRequests     OutOfRegionRequest[] @relation("OORRequestedBy")
-  outOfRegionApprovals    OutOfRegionRequest[] @relation("OORApprovedBy")
-  stockMovements          StockMovement[]      @relation("StockMovedBy")
-  stockAdjustments        StockMovement[]      @relation("StockAdjustedBy")
-  ownedCustomers          Customer[]           @relation("CustomerOwner")
+  refreshTokens              RefreshToken[]
+  attendanceEvents           AttendanceEvent[]
+  purchaseOrdersCreated      PurchaseOrder[]       @relation("POCreatedBy")
+  purchaseOrdersApproved     PurchaseOrder[]       @relation("POApprovedBy")
+  purchaseOrdersDelivered    PurchaseOrder[]       @relation("PODeliveredBy")
+  collections                Collection[]
+  secondarySales             SecondarySale[]
+  competitorReports          CompetitorReport[]
+  notifications              Notification[]
+  outOfRegionRequests        OutOfRegionRequest[]  @relation("OORRequestedBy")
+  outOfRegionApprovals       OutOfRegionRequest[]  @relation("OORApprovedBy")
+  stockMovements             StockMovement[]       @relation("StockMovedBy")
+  stockAdjustments           StockMovement[]       @relation("StockAdjustedBy")
+  ownedCustomers             Customer[]            @relation("CustomerOwner")
+
+  // Target assignments — targets this user has assigned downward to others
+  targetsAssigned            TargetAssignment[]    @relation("AssignedBy")
+  // Target assignments — targets this user has received from their superior
+  targetsReceived            TargetAssignment[]    @relation("AssignedTo")
 
   @@index([tier])
   @@index([role])
@@ -203,6 +250,7 @@ model User {
   @@index([region])
   @@index([email])
   @@index([isActive])
+  @@index([accountOrigin])
 }
 
 model RefreshToken {
@@ -240,6 +288,46 @@ model AttendanceEvent {
   @@index([userId, deviceTime])
   @@index([type])
   @@index([flag])
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// TARGET ASSIGNMENTS
+// Tracks who assigned what target to whom, at which period.
+// Rules:
+//   - Only the assigner can edit or revoke an assignment
+//   - A user can only assign up to their own received target amount
+//   - Sales Head originates targets (no assignedById — they set targets themselves)
+// ─────────────────────────────────────────────────────────────────────────────
+
+model TargetAssignment {
+  id              String          @id @default(uuid())
+
+  // Who assigned this target (null = Sales Head originated it)
+  assignedById    String?
+  assignedBy      User?           @relation("AssignedBy", fields: [assignedById], references: [id])
+
+  // Who received this target
+  assignedToId    String
+  assignedTo      User            @relation("AssignedTo", fields: [assignedToId], references: [id])
+
+  category        ProductCategory // LOTION | SOAP | CREAM | MAINTENANCE
+  period          TargetPeriod    @default(ANNUAL)
+  year            Int             // e.g. 2026
+  quarter         Int?            // 1–4 (null for ANNUAL)
+  month           Int?            // 1–12 (null for ANNUAL/QUARTERLY)
+  week            Int?            // ISO week number (null for non-weekly)
+
+  targetCartons   Int             // Target quantity in cartons
+  note            String?
+
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@unique([assignedToId, category, period, year, quarter, month, week])
+  @@index([assignedById])
+  @@index([assignedToId])
+  @@index([category])
+  @@index([year])
 }
 
 // ═════════════════════════════════════════════════════════════════════════════

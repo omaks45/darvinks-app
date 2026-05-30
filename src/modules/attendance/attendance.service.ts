@@ -1,4 +1,3 @@
-import type { File as MulterFile } from 'multer';
 // src/modules/attendance/attendance.service.ts
 import {
   BadRequestException,
@@ -15,7 +14,7 @@ import { CloudinaryService } from '@modules/cloudinary/cloudinary.service';
 import {
   checkAttendanceWindow,
 } from '@common/utils/attendance-window.util';
-import type { JwtPayload } from '@modules/auth/strategies/jwt.strategy';
+import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type {
   ClockEventDto,
   KdVisitDto,
@@ -38,7 +37,7 @@ export class AttendanceService {
   async clockIn(
     requester: JwtPayload,
     dto: ClockEventDto,
-    photo: MulterFile,
+    photo: Express.Multer.File,
   ) {
     const deviceTime = new Date(dto.deviceTime);
 
@@ -95,7 +94,7 @@ export class AttendanceService {
   async clockOut(
     requester: JwtPayload,
     dto: ClockEventDto,
-    photo: MulterFile,
+    photo: Express.Multer.File,
   ) {
     const deviceTime = new Date(dto.deviceTime);
 
@@ -153,7 +152,7 @@ export class AttendanceService {
   async recordKdVisit(
     requester: JwtPayload,
     dto: KdVisitDto,
-    photo: MulterFile,
+    photo: Express.Multer.File,
   ) {
     if (requester.tier !== 'TIER1') {
       throw new ForbiddenException('KD visits are recorded by Tier 1 agents only');
@@ -195,7 +194,7 @@ export class AttendanceService {
   async syncOfflineBatch(
     requester: JwtPayload,
     events: OfflineSyncItemDto[],
-    photos: MulterFile[],
+    photos: Express.Multer.File[],
   ): Promise<{ processed: number; skipped: number }> {
     let processed = 0;
     let skipped = 0;
@@ -291,7 +290,7 @@ export class AttendanceService {
   // ─── Private helpers ──────────────────────────────────────────────────────
 
   private async uploadAttendancePhoto(
-    photo: MulterFile,
+    photo: Express.Multer.File,
     folder: 'attendance/clock-in' | 'attendance/clock-out' | 'attendance/kd-visits',
     userId: string,
     deviceTime: Date,

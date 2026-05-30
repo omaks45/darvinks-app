@@ -1,9 +1,8 @@
 // Validates all required environment variables at application startup.
 // Any missing or malformed variable throws immediately — fail fast.
 
-import { plainToInstance } from 'class-transformer';
+import { plainToInstance, Transform } from 'class-transformer';
 import {
-    IsBoolean,
     IsEnum,
     IsInt,
     IsNotEmpty,
@@ -20,12 +19,19 @@ enum Environment {
     Test = 'test',
 }
 
+// Explicit string→number coercion decorator.
+// Required because class-transformer v0.5.x's enableImplicitConversion
+// does not reliably coerce strings to numbers when the class property
+// already has a numeric default value.
+const ToInt = () => Transform(({ value }) => parseInt(value, 10));
+
 class EnvironmentVariables {
-  // Application
+    // ── Application ────────────────────────────────────────────────────────────
 
     @IsEnum(Environment)
     NODE_ENV: Environment = Environment.Development;
 
+    @ToInt()
     @IsInt()
     @Min(1)
     @Max(65535)
@@ -35,13 +41,13 @@ class EnvironmentVariables {
     @IsOptional()
     API_PREFIX = 'api/v1';
 
-    //Database
+    // ── Database ───────────────────────────────────────────────────────────────
 
     @IsString()
     @IsNotEmpty()
     DATABASE_URL!: string;
 
-    //JWT
+    // ── JWT ────────────────────────────────────────────────────────────────────
 
     @IsString()
     @IsNotEmpty()
@@ -59,7 +65,7 @@ class EnvironmentVariables {
     @IsNotEmpty()
     JWT_REFRESH_EXPIRY = '30d';
 
-    // Redis
+    // ── Redis ──────────────────────────────────────────────────────────────────
     // Dev  → host + port (local Redis)
     // Prod → REDIS_URL (Redis Cloud TLS — validated separately below)
 
@@ -67,6 +73,7 @@ class EnvironmentVariables {
     @IsNotEmpty()
     REDIS_HOST = 'localhost';
 
+    @ToInt()
     @IsInt()
     @Min(1)
     @Max(65535)
@@ -80,7 +87,7 @@ class EnvironmentVariables {
     @IsOptional()
     REDIS_URL?: string;
 
-    //Cloudinary
+    // ── Cloudinary ─────────────────────────────────────────────────────────────
 
     @IsString()
     @IsNotEmpty()
@@ -94,19 +101,19 @@ class EnvironmentVariables {
     @IsNotEmpty()
     CLOUDINARY_API_SECRET!: string;
 
-    //Google
+    // ── Google ─────────────────────────────────────────────────────────────────
 
     @IsString()
     @IsNotEmpty()
     GOOGLE_MAPS_API_KEY!: string;
 
-    //Firebase
+    // ── Firebase ───────────────────────────────────────────────────────────────
 
     @IsString()
     @IsNotEmpty()
     FIREBASE_SERVICE_ACCOUNT!: string;
 
-    // Mail (SMTP)
+    // ── Mail (SMTP) ────────────────────────────────────────────────────────────
     //
     // Currently: Gmail SMTP
     //   MAIL_HOST=smtp.gmail.com
@@ -128,6 +135,7 @@ class EnvironmentVariables {
     @IsNotEmpty()
     MAIL_HOST!: string;
 
+    @ToInt()
     @IsInt()
     @Min(1)
     @Max(65535)
@@ -150,17 +158,16 @@ class EnvironmentVariables {
     @IsOptional()
     MAIL_FROM_NAME?: string;
 
-    //Security
+    // ── Security ───────────────────────────────────────────────────────────────
 
+    @ToInt()
     @IsInt()
     @Min(10)
     @Max(14)
     BCRYPT_ROUNDS = 12;
 }
 
-export function validateEnv(
-    config: Record<string, unknown>,
-    ): EnvironmentVariables {
+export function validateEnv(config: Record<string, unknown>): EnvironmentVariables {
     const validatedConfig = plainToInstance(EnvironmentVariables, config, {
         enableImplicitConversion: true,
     });
@@ -171,17 +178,17 @@ export function validateEnv(
 
     if (errors.length > 0) {
         const messages = errors
-        .map((e) => Object.values(e.constraints ?? {}).join(', '))
-        .join('\n');
+            .map((e) => Object.values(e.constraints ?? {}).join(', '))
+            .join('\n');
         throw new Error(`Environment validation failed:\n${messages}`);
     }
 
-    // Extra cross-field rules that class-validator can't express declaratively
+    // ── Cross-field rules (can't be expressed with class-validator decorators) ─
 
     // Rule 1: REDIS_URL is required in production
     if (config['NODE_ENV'] === 'production' && !config['REDIS_URL']) {
         throw new Error(
-        'Environment validation failed: REDIS_URL is required in production (Redis Cloud)',
+            'Environment validation failed: REDIS_URL is required in production (Redis Cloud)',
         );
     }
 
@@ -195,16 +202,16 @@ export function validateEnv(
         // Gmail App Passwords are 16 chars with spaces (e.g. "abcd efgh ijkl mnop")
         // Real passwords usually don't have spaces — warn but don't block
         console.warn(
-        '[Mail] MAIL_PASSWORD looks like a Gmail App Password with spaces — ' +
-        'make sure you\'re using an App Password from myaccount.google.com/apppasswords',
+            '[Mail] MAIL_PASSWORD looks like a Gmail App Password with spaces — ' +
+            "make sure you're using an App Password from myaccount.google.com/apppasswords",
         );
     }
 
     // Rule 3: MAIL_FROM must be set in production (can't send from gmail in prod)
     if (config['NODE_ENV'] === 'production' && !config['MAIL_FROM']) {
         throw new Error(
-        'Environment validation failed: MAIL_FROM is required in production ' +
-        '(set to your domain address, e.g. no-reply@darvinks.com)',
+            'Environment validation failed: MAIL_FROM is required in production ' +
+            '(set to your domain address, e.g. no-reply@darvinks.com)',
         );
     }
 

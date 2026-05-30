@@ -1,4 +1,4 @@
-import type { File as MulterFile } from 'multer';
+// src/modules/users/users.controller.ts
 import {
   Body,
   Controller,
@@ -10,8 +10,12 @@ import {
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
-import { ApiBearerAuth, ApiConsumes, ApiOperation, ApiTags } from '@nestjs/swagger';
-
+import {
+  ApiBearerAuth,
+  ApiConsumes,
+  ApiOperation,
+  ApiTags,
+} from '@nestjs/swagger';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
@@ -63,7 +67,7 @@ export class UsersController {
   updateProfile(
     @CurrentUser() user: JwtPayload,
     @Body() dto: UpdateProfileDto,
-    @UploadedFile() profilePicture?: MulterFile,
+    @UploadedFile() profilePicture?: Express.Multer.File,
   ) {
     return this.usersService.updateProfile(user.sub, dto, profilePicture);
   }

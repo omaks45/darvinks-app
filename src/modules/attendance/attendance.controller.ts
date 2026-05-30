@@ -1,5 +1,3 @@
-import type { File as MulterFile } from 'multer';
-// src/modules/attendance/attendance.controller.ts
 import {
   Body,
   Controller,
@@ -23,10 +21,10 @@ import {
 
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
-import type { JwtPayload } from '@modules/auth/strategies/jwt.strategy';
+import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import {
   attendancePhotoFilter,
-} from '@modules/auth/auth.constants';
+} from '@modules/auths/auths.constant';
 import { AttendanceService } from './attendance.service';
 import {
   AttendanceQueryDto,
@@ -57,7 +55,7 @@ export class AttendanceController {
   clockIn(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ClockEventDto,
-    @UploadedFile() photo: MulterFile,
+    @UploadedFile() photo: Express.Multer.File,
   ) {
     return this.attendanceService.clockIn(user, dto, photo);
   }
@@ -75,7 +73,7 @@ export class AttendanceController {
   clockOut(
     @CurrentUser() user: JwtPayload,
     @Body() dto: ClockEventDto,
-    @UploadedFile() photo: MulterFile,
+    @UploadedFile() photo: Express.Multer.File,
   ) {
     return this.attendanceService.clockOut(user, dto, photo);
   }
@@ -93,7 +91,7 @@ export class AttendanceController {
   recordKdVisit(
     @CurrentUser() user: JwtPayload,
     @Body() dto: KdVisitDto,
-    @UploadedFile() photo: MulterFile,
+    @UploadedFile() photo: Express.Multer.File,
   ) {
     return this.attendanceService.recordKdVisit(user, dto, photo);
   }
@@ -113,7 +111,7 @@ export class AttendanceController {
   syncOffline(
     @CurrentUser() user: JwtPayload,
     @Body('events') eventsJson: string,
-    @UploadedFiles() photos: MulterFile[],
+    @UploadedFiles() photos: Express.Multer.File[],
   ) {
     const events: OfflineSyncItemDto[] = JSON.parse(eventsJson);
     return this.attendanceService.syncOfflineBatch(user, events, photos);

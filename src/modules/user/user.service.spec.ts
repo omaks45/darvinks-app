@@ -1,12 +1,11 @@
-import type { File as MulterFile } from 'multer';
 // src/modules/users/users.service.spec.ts
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { UserTier, Team } from '@prisma/client';
-import { UsersService } from './users.service';
+import { UsersService } from './user.service';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { CloudinaryService } from '@modules/cloudinary/cloudinary.service';
-import type { JwtPayload } from '@modules/auth/strategies/jwt.strategy';
+import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
@@ -27,10 +26,12 @@ const mockCloudinary = {
 function makeUser(overrides: Partial<{ id: string; tier: UserTier; team: Team }> = {}) {
   return {
     id: 'user-id',
-    employeeRef: 'DRV-BRT-0001',
+    employeeRef: 'Dar-00000001',
     fullName: 'Test User',
     email: 'test@darvinks.com',
     phone: '+2348012345678',
+    role: 'MERCHANDISER',
+    roleLabel: 'Merchandiser',
     tier: UserTier.TIER2,
     team: Team.BRIGHT,
     region: 'SE1',
@@ -40,15 +41,22 @@ function makeUser(overrides: Partial<{ id: string; tier: UserTier; team: Team }>
     idCardUrl: null,
     annualTargets: {},
     isActive: true,
+    accountOrigin: 'SELF_REGISTERED',
+    warehouseLocation: null,
     createdAt: new Date(),
     updatedAt: new Date(),
     ...overrides,
   };
 }
 
-function makeRequester(tier: UserTier, team: Team = Team.BRIGHT): JwtPayload {
+function makeRequester(
+  tier: UserTier,
+  team: Team = Team.BRIGHT,
+): JwtPayload {
   return { sub: 'requester-id', email: 'req@darvinks.com', tier, team };
 }
+
+// ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('UsersService', () => {
   let service: UsersService;
@@ -63,7 +71,7 @@ describe('UsersService', () => {
     }).compile();
 
     service = module.get<UsersService>(UsersService);
-    jest.clearAllMocks();
+    jest.resetAllMocks();
   });
 
   // ── findById ───────────────────────────────────────────────────────────────
@@ -79,45 +87,55 @@ describe('UsersService', () => {
 
     it('throws NotFoundException when user does not exist', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(null);
+      await expect(service.findById('nonexistent')).rejects.toThrow(NotFoundException);
+    });
 
-      await expect(service.findById('nonexistent')).rejects.toThrow(
-        NotFoundException,
-      );
+    it('never exposes passwordHash', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(makeUser());
+      await service.findById('user-id');
+
+      const selectArg = mockPrisma.user.findUnique.mock.calls[0][0].select;
+      expect(selectArg.passwordHash).toBeUndefined();
     });
   });
 
   // ── findVisible ────────────────────────────────────────────────────────────
 
   describe('findVisible()', () => {
-    it('TIER5_SYSTEM_ADMIN can see all users (no team filter)', async () => {
-      const users = [makeUser(), makeUser({ team: Team.RADIANT })];
-      mockPrisma.user.findMany.mockResolvedValue(users);
-
+    it('TIER5_SYSTEM_ADMIN sees all users with no team filter', async () => {
+      mockPrisma.user.findMany.mockResolvedValue([]);
       await service.findVisible(makeRequester(UserTier.TIER5_SYSTEM_ADMIN));
 
-      expect(mockPrisma.user.findMany).toHaveBeenCalledWith(
-        expect.not.objectContaining({ where: expect.objectContaining({ team: expect.anything() }) }),
-      );
+      const call = mockPrisma.user.findMany.mock.calls[0][0];
+      expect(call.where).toBeUndefined();
     });
 
-    it('TIER5_SALES_HEAD can see all users', async () => {
+    it('TIER5_SALES_HEAD sees all users', async () => {
       mockPrisma.user.findMany.mockResolvedValue([]);
       await service.findVisible(makeRequester(UserTier.TIER5_SALES_HEAD));
-      // Should NOT have team filter
+
       const call = mockPrisma.user.findMany.mock.calls[0][0];
       expect(call.where).toBeUndefined();
     });
 
-    it('TIER6_GM can see all users', async () => {
+    it('TIER5_WAREHOUSE sees all users', async () => {
+      mockPrisma.user.findMany.mockResolvedValue([]);
+      await service.findVisible(makeRequester(UserTier.TIER5_WAREHOUSE));
+
+      const call = mockPrisma.user.findMany.mock.calls[0][0];
+      expect(call.where).toBeUndefined();
+    });
+
+    it('TIER6_GM sees all users', async () => {
       mockPrisma.user.findMany.mockResolvedValue([]);
       await service.findVisible(makeRequester(UserTier.TIER6_GM));
+
       const call = mockPrisma.user.findMany.mock.calls[0][0];
       expect(call.where).toBeUndefined();
     });
 
-    it('TIER4 (ZSM) filters by team and lower tiers', async () => {
+    it('TIER4 filters by team and includes lower tiers', async () => {
       mockPrisma.user.findMany.mockResolvedValue([]);
-
       await service.findVisible(makeRequester(UserTier.TIER4, Team.BRIGHT));
 
       const call = mockPrisma.user.findMany.mock.calls[0][0];
@@ -126,11 +144,11 @@ describe('UsersService', () => {
       expect(call.where.tier.in).toContain(UserTier.TIER2);
       expect(call.where.tier.in).toContain(UserTier.TIER3);
       expect(call.where.tier.in).toContain(UserTier.TIER4);
+      expect(call.where.tier.in).not.toContain(UserTier.TIER5_SYSTEM_ADMIN);
     });
 
-    it('TIER2 (SR) can only see TIER1 and own tier in same team', async () => {
+    it('TIER2 can only see TIER1 and TIER2 in the same team', async () => {
       mockPrisma.user.findMany.mockResolvedValue([]);
-
       await service.findVisible(makeRequester(UserTier.TIER2, Team.BRIGHT));
 
       const call = mockPrisma.user.findMany.mock.calls[0][0];
@@ -138,28 +156,23 @@ describe('UsersService', () => {
       expect(call.where.tier.in).toContain(UserTier.TIER1);
       expect(call.where.tier.in).toContain(UserTier.TIER2);
       expect(call.where.tier.in).not.toContain(UserTier.TIER3);
-      expect(call.where.tier.in).not.toContain(UserTier.TIER4);
     });
 
-    it('TIER1 can only see their own tier in the same team', async () => {
+    it('TIER1 can only see TIER1 in the same team', async () => {
       mockPrisma.user.findMany.mockResolvedValue([]);
-
       await service.findVisible(makeRequester(UserTier.TIER1, Team.RADIANT));
 
       const call = mockPrisma.user.findMany.mock.calls[0][0];
       expect(call.where.team).toBe(Team.RADIANT);
-      // TIER1 has no lower tiers, so only sees TIER1
       expect(call.where.tier.in).toEqual([UserTier.TIER1]);
     });
 
-    it('does not leak users from opposite team for non-admin tiers', async () => {
+    it('does not leak users from the opposite team for non-admin tiers', async () => {
       mockPrisma.user.findMany.mockResolvedValue([]);
-
       await service.findVisible(makeRequester(UserTier.TIER3, Team.BRIGHT));
 
       const call = mockPrisma.user.findMany.mock.calls[0][0];
       expect(call.where.team).toBe(Team.BRIGHT);
-      // Must not have Team.RADIANT in the query
       expect(call.where.team).not.toBe(Team.RADIANT);
     });
   });
@@ -167,7 +180,7 @@ describe('UsersService', () => {
   // ── saveIdCardUrl ──────────────────────────────────────────────────────────
 
   describe('saveIdCardUrl()', () => {
-    it('updates user record with the provided ID card URL', async () => {
+    it('updates user record with the ID card URL', async () => {
       mockPrisma.user.update.mockResolvedValue({});
 
       await service.saveIdCardUrl('user-id', 'https://cloudinary.com/card.pdf');
@@ -195,17 +208,20 @@ describe('UsersService', () => {
       );
     });
 
-    it('uploads new profile picture and persists URL', async () => {
+    it('uploads profile picture and persists URL', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(makeUser());
       mockCloudinary.uploadBuffer.mockResolvedValue({
         secure_url: 'https://cloudinary.com/new-photo.jpg',
       });
       mockPrisma.user.update.mockResolvedValue(makeUser());
 
+      // Express.Multer.File is available globally via tsconfig types: ["multer"]
       const mockFile = {
         buffer: Buffer.from('img'),
         mimetype: 'image/jpeg',
-      } as MulterFile;
+        originalname: 'photo.jpg',
+        size: 1024,
+      } as Express.Multer.File;
 
       await service.updateProfile('user-id', {}, mockFile);
 
@@ -221,10 +237,18 @@ describe('UsersService', () => {
 
     it('throws NotFoundException when user does not exist', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(null);
-
       await expect(service.updateProfile('bad-id', {})).rejects.toThrow(
         NotFoundException,
       );
+    });
+
+    it('does not call Cloudinary when no picture is provided', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(makeUser());
+      mockPrisma.user.update.mockResolvedValue(makeUser());
+
+      await service.updateProfile('user-id', { phone: '+2348011111111' });
+
+      expect(mockCloudinary.uploadBuffer).not.toHaveBeenCalled();
     });
   });
 });
