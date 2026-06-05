@@ -1,4 +1,4 @@
-
+// src/modules/admin/admin.service.ts
 import {
   BadRequestException,
   ConflictException,
@@ -57,7 +57,7 @@ export class AdminService {
     @InjectQueue('notifications') private readonly notifyQueue: Queue,
   ) {}
 
-  // ─── Provision account ────────────────────────────────────────────────────
+  // Provision account 
 
   async provisionUser(
     requester: JwtPayload,
@@ -184,6 +184,14 @@ export class AdminService {
       { attempts: 3, backoff: { type: 'exponential', delay: 5000 } },
     );
 
+    // 12. Queue ID card generation — same as self-registration flow
+    // Tier 5 and 6 provisioned users also receive a digital ID card
+    void this.notifyQueue.add(
+      'generate-id-card',
+      { userId: user.id, roleLabel },
+      { attempts: 3, backoff: { type: 'exponential', delay: 5000 } },
+    );
+
     this.logger.log(
       `Account provisioned: ${employeeRef} (${roleLabel}) by admin ${requester.sub}`,
     );
@@ -198,7 +206,7 @@ export class AdminService {
     };
   }
 
-  // ─── Find all users ───────────────────────────────────────────────────────
+  // Find all users
 
   async findAllUsers() {
     return this.prisma.user.findMany({
