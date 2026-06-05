@@ -1,3 +1,4 @@
+
 import {
   BadRequestException,
   ConflictException,
@@ -169,7 +170,8 @@ export class AdminService {
     });
 
     // 11. Queue welcome email with temporary password
-    await this.notifyQueue.add(
+    // fire-and-forget — do not await
+    void this.notifyQueue.add(
       'send-provisioning-email',
       {
         userId: user.id,
@@ -331,7 +333,7 @@ export class AdminService {
       }),
     ]);
 
-    await this.notifyQueue.add(
+    void this.notifyQueue.add(
       'send-password-reset-email',
       {
         userId: id,

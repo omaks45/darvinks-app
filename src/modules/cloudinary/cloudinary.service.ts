@@ -1,8 +1,8 @@
-
+// src/modules/cloudinary/cloudinary.service.ts
 import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { v2 as cloudinary, UploadApiResponse } from 'cloudinary';
-import type { AppConfig, CloudinaryConfig } from '../../common/config/app.config';
+import type { AppConfig, CloudinaryConfig } from '@common/config/app.config';
 
 export type CloudinaryFolder =
   | 'attendance/clock-in'
@@ -48,6 +48,8 @@ export class CloudinaryService {
       const uploadOptions: Record<string, unknown> = {
         folder: `tb-darvinks/${folder}`,
         resource_type: resourceType,
+        access_mode: 'public',
+        type: 'upload',
         ...(publicId ? { public_id: publicId } : {}),
         transformation: watermarkText
           ? [

@@ -1,7 +1,6 @@
-// test/attendance.e2e-spec.ts
 // Integration tests for clock-in, clock-out, KD visits, offline sync, and queries.
 
-import { default as request } from 'supertest';
+import request from 'supertest';
 import { HttpStatus, INestApplication } from '@nestjs/common';
 import { PrismaService } from '../src/common/prisma/prisma.service';
 import {

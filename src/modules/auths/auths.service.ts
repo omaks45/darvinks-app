@@ -1,3 +1,4 @@
+// src/modules/auth/auth.service.ts
 import {
   BadRequestException,
   ConflictException,
@@ -27,7 +28,7 @@ export class AuthService {
     @InjectQueue('notifications') private readonly notifyQueue: Queue,
   ) {}
 
-  // Register
+  // ─── Register ─────────────────────────────────────────────────────────────
 
   async register(
     dto: RegisterDto,
@@ -92,12 +93,14 @@ export class AuthService {
       select: { id: true, employeeRef: true },
     });
 
-    // 8. Queue ID card generation (non-blocking, 3 retries)
-    await this.notifyQueue.add(
+    // 8. Queue ID card generation — fire and forget (non-blocking)
+    // Do NOT await — the job runs in the background after the response is sent
+    void this.notifyQueue.add(
       'generate-id-card',
       { userId: user.id, roleLabel },
       { attempts: 3, backoff: { type: 'exponential', delay: 5000 } },
     );
+    console.log('>>> ID card job queued for', user.id); 
 
     return {
       userId: user.id,
@@ -106,7 +109,7 @@ export class AuthService {
     };
   }
 
-  // Login
+  // ─── Login ────────────────────────────────────────────────────────────────
 
   async login(dto: LoginDto): Promise<AuthTokensResponse> {
     const user = await this.prisma.user.findUnique({
@@ -153,7 +156,7 @@ export class AuthService {
     return { accessToken, refreshToken, expiresIn: jwtCfg.accessExpiry };
   }
 
-  //Refresh
+  // ─── Refresh ──────────────────────────────────────────────────────────────
 
   async refresh(rawRefreshToken: string): Promise<AuthTokensResponse> {
     const { accessToken, refreshToken } =
@@ -162,13 +165,13 @@ export class AuthService {
     return { accessToken, refreshToken, expiresIn: jwtCfg.accessExpiry };
   }
 
-  // Logout
+  // ─── Logout ───────────────────────────────────────────────────────────────
 
   async logout(rawRefreshToken: string): Promise<void> {
     await this.tokenService.revokeToken(rawRefreshToken);
   }
 
-  // Change password
+  // ─── Change password ──────────────────────────────────────────────────────
 
   async changePassword(
     userId: string,
@@ -201,7 +204,7 @@ export class AuthService {
     ]);
   }
 
-  // Roles list (for registration dropdown)
+  // ─── Roles list (for registration dropdown) ───────────────────────────────
 
   getRoles() {
     // eslint-disable-next-line @typescript-eslint/no-var-requires

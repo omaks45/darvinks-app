@@ -1,8 +1,13 @@
+// src/modules/attendance/attendance.module.ts
 import { Module } from '@nestjs/common';
-import { AttendanceService } from './attendance.service';
+import { BullModule } from '@nestjs/bull';
 import { AttendanceController } from './attendance.controller';
+import { AttendanceService } from './attendance.service';
 
 @Module({
+  imports: [
+    BullModule.registerQueue({ name: 'notifications' }),
+  ],
   controllers: [AttendanceController],
   providers: [AttendanceService],
 })

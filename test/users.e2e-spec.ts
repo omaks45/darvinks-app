@@ -1,8 +1,7 @@
-
 // Integration tests for the Users module.
 // Covers GET /users/me, GET /users, GET /users/:id, PATCH /users/me
 
-import { default as request } from 'supertest';
+import request from 'supertest';
 import { HttpStatus, INestApplication } from '@nestjs/common';
 import { PrismaService } from '../src/common/prisma/prisma.service';
 import { buildTestApp, cleanDatabase, makeFakeImageBuffer } from './helpers/app.helper';

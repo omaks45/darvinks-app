@@ -63,6 +63,7 @@ export interface AppConfig {
 
 export default (): AppConfig => {
     const mailPort = parseInt(process.env.MAIL_PORT ?? '587', 10);
+    console.log('>>> redis.url value:', process.env.REDIS_URL ? process.env.REDIS_URL.substring(0, 30) + '...' : 'UNDEFINED');
 
     return {
         nodeEnv: process.env.NODE_ENV ?? 'development',

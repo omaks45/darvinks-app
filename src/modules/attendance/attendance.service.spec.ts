@@ -1,4 +1,4 @@
-// src/modules/attendance/attendance.service.spec.ts
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { AttendanceFlag, AttendanceType, UserTier, Team } from '@prisma/client';
@@ -76,12 +76,18 @@ describe('AttendanceService', () => {
     }).compile();
 
     service = module.get<AttendanceService>(AttendanceService);
-    jest.clearAllMocks();
+    // resetAllMocks clears both call history AND persistent mockResolvedValue defaults.
+    // We then re-establish the Cloudinary default so all tests that need uploads work.
+    jest.resetAllMocks();
 
-    // Default: Cloudinary upload succeeds
+    // Default: Cloudinary upload succeeds — restored after every reset
     mockCloudinary.uploadBuffer.mockResolvedValue({
       secure_url: 'https://res.cloudinary.com/tb-darvinks/photo.jpg',
     });
+
+    // Default: findFirst returns null (no duplicate, no existing record)
+    // Individual tests that need specific behaviour override this with mockResolvedValueOnce
+    mockPrisma.attendanceEvent.findFirst.mockResolvedValue(null);
   });
 
   // ── clockIn ────────────────────────────────────────────────────────────────
@@ -213,15 +219,9 @@ describe('AttendanceService', () => {
 
   describe('clockOut()', () => {
     it('throws BadRequestException when no clock-in exists for the day', async () => {
-      // findFirst for clock-out duplicate check: no duplicate
-      // findFirst for clock-in check: no clock-in either
-      mockPrisma.attendanceEvent.findFirst
-        .mockResolvedValueOnce(null)  // clock-out duplicate check
-        .mockResolvedValueOnce(null); // clock-in existence check
-
-      // The service checks clock-in existence first, then duplicate
-      // Let's check internal order by making clock-in check null:
-      mockPrisma.attendanceEvent.findFirst.mockResolvedValue(null);
+      // clockOut() calls assertClockInExists FIRST → findFirst for CLOCK_IN → null = no clock-in
+      // Service throws immediately, never reaches assertNoDuplicateEvent
+      mockPrisma.attendanceEvent.findFirst.mockResolvedValueOnce(null);
 
       await expect(
         service.clockOut(makeRequester(), makeClockDto(ON_TIME_CLOCK_OUT), makePhoto()),
@@ -252,10 +252,12 @@ describe('AttendanceService', () => {
     });
 
     it('throws BadRequestException on duplicate clock-out', async () => {
-      // 1st findFirst (duplicate check) returns existing clock-out
-      mockPrisma.attendanceEvent.findFirst.mockResolvedValueOnce({
-        id: 'existing-clock-out',
-      });
+      // clockOut() call order:
+      //   1. assertClockInExists   → findFirst CLOCK_IN  → return record (clock-in exists)
+      //   2. assertNoDuplicateEvent → findFirst CLOCK_OUT → return record (duplicate!)
+      mockPrisma.attendanceEvent.findFirst
+        .mockResolvedValueOnce({ id: 'clock-in-event' })    // clock-in exists
+        .mockResolvedValueOnce({ id: 'existing-clock-out' }); // duplicate clock-out
 
       await expect(
         service.clockOut(makeRequester(), makeClockDto(ON_TIME_CLOCK_OUT), makePhoto()),
@@ -347,7 +349,16 @@ describe('AttendanceService', () => {
     }
 
     it('processes valid events and returns correct counts', async () => {
-      mockPrisma.attendanceEvent.findFirst.mockResolvedValue(null); // no duplicates
+      // For each event, syncOfflineBatch calls checkDuplicateEvent (1 findFirst per event).
+      // CLOCK_OUT also calls assertClockInExists inside the service loop,
+      // which is another findFirst — so CLOCK_OUT needs 2 findFirst calls:
+      //   CLOCK_IN event:  findFirst → null (no duplicate)
+      //   CLOCK_OUT event: findFirst → null (no duplicate for CLOCK_OUT)
+      //                    findFirst → { id } (clock-in exists — needed by assertClockInExists)
+      // findFirst default = null (set in beforeEach) — no duplicates for either event
+      // syncOfflineBatch does NOT call assertClockInExists inside the loop for CLOCK_OUT,
+      // so each event only triggers one findFirst call (checkDuplicateEvent)
+
       mockPrisma.attendanceEvent.create.mockResolvedValue({ id: 'eid', flag: AttendanceFlag.ON_TIME });
 
       const events: OfflineSyncItemDto[] = [
@@ -363,11 +374,15 @@ describe('AttendanceService', () => {
     });
 
     it('skips events with no corresponding photo', async () => {
+      // findFirst default (null) and Cloudinary default are set in beforeEach.
+      // photos[1] is undefined → second event skipped immediately before any DB call.
+      mockPrisma.attendanceEvent.create.mockResolvedValue({ id: 'eid', flag: AttendanceFlag.ON_TIME });
+
       const events: OfflineSyncItemDto[] = [
         makeOfflineEvent('CLOCK_IN'),
         makeOfflineEvent('CLOCK_OUT'),
       ];
-      // Only one photo provided — second event has no photo
+      // Only one photo — photos[1] is undefined, second event is skipped
       const photos = [makePhoto()];
 
       const result = await service.syncOfflineBatch(makeRequester(), events, photos);

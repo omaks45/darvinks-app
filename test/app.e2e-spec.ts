@@ -1,24 +1,32 @@
-import { Test, TestingModule } from '@nestjs/testing';
-import { INestApplication } from '@nestjs/common';
-import * as request from 'supertest';
-import { AppModule } from './../src/app.module';
 
-describe('AppController (e2e)', () => {
+// Basic smoke test — verifies the app boots and the health endpoint responds.
+import request from 'supertest';
+import { HttpStatus, INestApplication } from '@nestjs/common';
+import { buildTestApp, cleanDatabase } from './helpers/app.helper';
+import { PrismaService } from '../src/common/prisma/prisma.service';
+
+describe('App (e2e)', () => {
   let app: INestApplication;
+  let prisma: PrismaService;
 
-  beforeEach(async () => {
-    const moduleFixture: TestingModule = await Test.createTestingModule({
-      imports: [AppModule],
-    }).compile();
-
-    app = moduleFixture.createNestApplication();
-    await app.init();
+  beforeAll(async () => {
+    ({ app, prisma } = await buildTestApp());
   });
 
-  it('/ (GET)', () => {
-    return request(app.getHttpServer())
-      .get('/')
-      .expect(200)
-      .expect('Hello World!');
+  afterAll(async () => {
+    await cleanDatabase(prisma);
+    await app.close();
+  });
+
+  it('GET /api/v1/auth/roles — app is running and responds', async () => {
+    await request(app.getHttpServer())
+      .get('/api/v1/auth/roles')
+      .expect(HttpStatus.OK);
+  });
+
+  it('responds 401 on a protected route without a token', async () => {
+    await request(app.getHttpServer())
+      .get('/api/v1/users/me')
+      .expect(HttpStatus.UNAUTHORIZED);
   });
 });
