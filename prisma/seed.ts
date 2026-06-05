@@ -1,13 +1,10 @@
 
-import * as dotenv from 'dotenv';
-dotenv.config();
-
 import { PrismaClient } from '@prisma/client';
 import * as bcrypt from 'bcryptjs';
 
 const prisma = new PrismaClient();
 
-//  Seed configuration
+// Seed configuration
 const SEED_ADMIN = {
     fullName:    'chigozie Okeke',
     email:       'jusmaks45@gmail.com',
@@ -15,6 +12,7 @@ const SEED_ADMIN = {
     password:    'Admin@Darvinks2026!',
     dateOfBirth: '2005-01-01',
 };
+
 
 async function main() {
     console.log(' Seeding System Admin...\n');
