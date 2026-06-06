@@ -1,3 +1,4 @@
+
 // Maps user-facing roles (what the registration UI shows) to internal tiers.
 // This is the single source of truth for the role → tier relationship.
 //
@@ -7,7 +8,7 @@
 
 import { UserTier } from '@prisma/client';
 
-// Role enum
+// ─── Role enum ────────────────────────────────────────────────────────────────
 // These are the exact role names shown in the registration UI dropdown.
 
 export enum UserRole {
@@ -26,7 +27,7 @@ export enum UserRole {
     GENERAL_MANAGER     = 'GENERAL_MANAGER',
 }
 
-// Role metadata
+// ─── Role metadata ────────────────────────────────────────────────────────────
 
 interface RoleMeta {
     tier: UserTier;
@@ -91,7 +92,7 @@ export const ROLE_META: Record<UserRole, RoleMeta> = {
         description: 'Operational gatekeeper — approves POs, manages users',
     },
     [UserRole.WAREHOUSE_ADMIN]: {
-        tier: UserTier.TIER5_WAREHOUSE,
+        tier: UserTier.WAREHOUSE_ADMIN,
         label: 'Warehouse Administrator',
         description: 'Custodian of stock records at a warehouse location',
     },
@@ -102,7 +103,7 @@ export const ROLE_META: Record<UserRole, RoleMeta> = {
     },
 };
 
-//Helpers
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
 /** Returns the UserTier for a given role. */
 export function tierFromRole(role: UserRole): UserTier {
