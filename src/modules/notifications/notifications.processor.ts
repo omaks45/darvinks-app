@@ -1,8 +1,9 @@
-// src/modules/notifications/notifications.processor.ts
+
 import { Logger, OnModuleInit } from '@nestjs/common';
 import { InjectQueue, Process, Processor } from '@nestjs/bull';
 import { Job, Queue } from 'bull';
 import { IdCardWorker } from './workers/id-card.worker';
+import { MailService } from '@modules/email/email.service';
 import { PrismaService } from '@common/prisma/prisma.service';
 
 interface AttendanceFlagJob {
@@ -40,6 +41,7 @@ export class NotificationsProcessor implements OnModuleInit {
 
   constructor(
     private readonly idCardWorker: IdCardWorker,
+    private readonly mailService: MailService,
     private readonly prisma: PrismaService,
     @InjectQueue('notifications') private readonly queue: Queue,
   ) {
@@ -75,6 +77,7 @@ export class NotificationsProcessor implements OnModuleInit {
     this.logger.warn(
       `Attendance flag → user=${userId} | type=${type} | flag=${flag}${message ? ` | ${message}` : ''}`,
     );
+    // Phase 4: send push notification to admin here
   }
 
   @Process('generate-id-card')
@@ -124,16 +127,36 @@ export class NotificationsProcessor implements OnModuleInit {
   @Process('send-provisioning-email')
   async handleProvisioningEmail(job: Job<ProvisioningEmailJob>): Promise<void> {
     const { email, fullName, roleLabel, temporaryPassword, employeeRef } = job.data;
-    this.logger.log(
-      `Provisioning email → ${email} (${fullName}) | ${roleLabel} | ref=${employeeRef} | pwd=${temporaryPassword}`,
-    );
+    this.logger.log(`Sending provisioning email → ${email} (${employeeRef})`);
+
+    try {
+      await this.mailService.sendProvisioningEmail({
+        to: email,
+        fullName,
+        roleLabel,
+        employeeRef,
+        temporaryPassword,
+      });
+    } catch (error) {
+      this.logger.error(`Provisioning email FAILED for ${email}`, error);
+      throw error;
+    }
   }
 
   @Process('send-password-reset-email')
   async handlePasswordResetEmail(job: Job<PasswordResetEmailJob>): Promise<void> {
     const { email, fullName, temporaryPassword } = job.data;
-    this.logger.log(
-      `Password reset email → ${email} (${fullName}) | pwd=${temporaryPassword}`,
-    );
+    this.logger.log(`Sending password reset email → ${email}`);
+
+    try {
+      await this.mailService.sendPasswordResetEmail({
+        to: email,
+        fullName,
+        temporaryPassword,
+      });
+    } catch (error) {
+      this.logger.error(`Password reset email FAILED for ${email}`, error);
+      throw error;
+    }
   }
 }
