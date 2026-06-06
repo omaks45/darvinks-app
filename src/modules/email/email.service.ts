@@ -23,10 +23,13 @@ export class MailService {
     this.transporter = nodemailer.createTransport({
       host:   this.mailCfg.host,
       port:   this.mailCfg.port,
-      secure: this.mailCfg.secure,
+      secure: this.mailCfg.port === 465, // true for 465 (SSL), false for 587 (STARTTLS)
       auth: {
         user: this.mailCfg.user,
-        pass: this.mailCfg.password,
+        pass: this.mailCfg.password.replace(/\s/g, ''), // strip spaces from App Password
+      },
+      tls: {
+        rejectUnauthorized: false, // allow self-signed certs in dev
       },
     });
 
@@ -51,7 +54,7 @@ export class MailService {
     this.logger.log(`Provisioning email sent → ${to} (${employeeRef})`);
   }
 
-  // Password reset email
+  // ── Password reset email ───────────────────────────────────────────────────
 
   async sendPasswordResetEmail(payload: {
     to:                string;
@@ -67,7 +70,7 @@ export class MailService {
     this.logger.log(`Password reset email sent → ${to}`);
   }
 
-  //  Core send
+  // ── Core send ──────────────────────────────────────────────────────────────
 
   private async send(opts: { to: string; subject: string; html: string }): Promise<void> {
     try {
