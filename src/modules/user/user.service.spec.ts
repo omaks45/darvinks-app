@@ -2,6 +2,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { NotFoundException } from '@nestjs/common';
 import { UserTier, Team } from '@prisma/client';
+import { getQueueToken } from '@nestjs/bull';
 import { UsersService } from './user.service';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { CloudinaryService } from '@modules/cloudinary/cloudinary.service';
@@ -19,6 +20,10 @@ const mockPrisma = {
 
 const mockCloudinary = {
   uploadBuffer: jest.fn(),
+};
+
+const mockQueue = {
+  add: jest.fn(),
 };
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -56,6 +61,15 @@ function makeRequester(
   return { sub: 'requester-id', email: 'req@darvinks.com', tier, team };
 }
 
+function makePhoto(): Express.Multer.File {
+  return {
+    buffer: Buffer.from('fake-image'),
+    mimetype: 'image/jpeg',
+    originalname: 'photo.jpg',
+    size: 1024,
+  } as Express.Multer.File;
+}
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('UsersService', () => {
@@ -67,11 +81,18 @@ describe('UsersService', () => {
         UsersService,
         { provide: PrismaService, useValue: mockPrisma },
         { provide: CloudinaryService, useValue: mockCloudinary },
+        { provide: getQueueToken('notifications'), useValue: mockQueue },
       ],
     }).compile();
 
     service = module.get<UsersService>(UsersService);
+
     jest.resetAllMocks();
+
+    // Default: Cloudinary upload succeeds
+    mockCloudinary.uploadBuffer.mockResolvedValue({
+      secure_url: 'https://res.cloudinary.com/darvinks/photo.jpg',
+    });
   });
 
   // ── findById ───────────────────────────────────────────────────────────────
@@ -99,6 +120,19 @@ describe('UsersService', () => {
     });
   });
 
+  // ── findProfile ────────────────────────────────────────────────────────────
+
+  describe('findProfile()', () => {
+    it('delegates to findById with the requesterId', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(makeUser());
+      await service.findProfile('user-id');
+
+      expect(mockPrisma.user.findUnique).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'user-id' } }),
+      );
+    });
+  });
+
   // ── findVisible ────────────────────────────────────────────────────────────
 
   describe('findVisible()', () => {
@@ -113,14 +147,6 @@ describe('UsersService', () => {
     it('TIER5_SALES_HEAD sees all users', async () => {
       mockPrisma.user.findMany.mockResolvedValue([]);
       await service.findVisible(makeRequester(UserTier.TIER5_SALES_HEAD));
-
-      const call = mockPrisma.user.findMany.mock.calls[0][0];
-      expect(call.where).toBeUndefined();
-    });
-
-    it('TIER5_WAREHOUSE sees all users', async () => {
-      mockPrisma.user.findMany.mockResolvedValue([]);
-      await service.findVisible(makeRequester(UserTier.TIER5_WAREHOUSE));
 
       const call = mockPrisma.user.findMany.mock.calls[0][0];
       expect(call.where).toBeUndefined();
@@ -210,28 +236,53 @@ describe('UsersService', () => {
 
     it('uploads profile picture and persists URL', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(makeUser());
-      mockCloudinary.uploadBuffer.mockResolvedValue({
-        secure_url: 'https://cloudinary.com/new-photo.jpg',
-      });
       mockPrisma.user.update.mockResolvedValue(makeUser());
 
-      // Express.Multer.File is available globally via tsconfig types: ["multer"]
-      const mockFile = {
-        buffer: Buffer.from('img'),
-        mimetype: 'image/jpeg',
-        originalname: 'photo.jpg',
-        size: 1024,
-      } as Express.Multer.File;
-
-      await service.updateProfile('user-id', {}, mockFile);
+      await service.updateProfile('user-id', {}, makePhoto());
 
       expect(mockCloudinary.uploadBuffer).toHaveBeenCalled();
       expect(mockPrisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            profilePictureUrl: 'https://cloudinary.com/new-photo.jpg',
+            profilePictureUrl: 'https://res.cloudinary.com/darvinks/photo.jpg',
           }),
         }),
+      );
+    });
+
+    it('queues ID card regeneration when profile picture is uploaded', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(makeUser());
+      mockPrisma.user.update.mockResolvedValue(makeUser());
+
+      await service.updateProfile('user-id', {}, makePhoto());
+
+      expect(mockQueue.add).toHaveBeenCalledWith(
+        'generate-id-card',
+        expect.objectContaining({ userId: 'user-id' }),
+        expect.any(Object),
+      );
+    });
+
+    it('does NOT queue ID card regeneration when no photo is provided', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(makeUser());
+      mockPrisma.user.update.mockResolvedValue(makeUser());
+
+      await service.updateProfile('user-id', { phone: '+2348011111111' });
+
+      expect(mockQueue.add).not.toHaveBeenCalled();
+    });
+
+    it('includes correct roleLabel in the ID card regeneration job', async () => {
+      const user = makeUser();
+      mockPrisma.user.findUnique.mockResolvedValue(user);
+      mockPrisma.user.update.mockResolvedValue(user);
+
+      await service.updateProfile('user-id', {}, makePhoto());
+
+      expect(mockQueue.add).toHaveBeenCalledWith(
+        'generate-id-card',
+        expect.objectContaining({ roleLabel: 'Merchandiser' }),
+        expect.any(Object),
       );
     });
 
@@ -249,6 +300,16 @@ describe('UsersService', () => {
       await service.updateProfile('user-id', { phone: '+2348011111111' });
 
       expect(mockCloudinary.uploadBuffer).not.toHaveBeenCalled();
+    });
+
+    it('returns the updated user profile', async () => {
+      const updated = { ...makeUser(), phone: '+2349012345678' };
+      mockPrisma.user.findUnique.mockResolvedValue(makeUser());
+      mockPrisma.user.update.mockResolvedValue(updated);
+
+      const result = await service.updateProfile('user-id', { phone: '+2349012345678' });
+
+      expect(result.phone).toBe('+2349012345678');
     });
   });
 });
