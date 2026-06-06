@@ -1,3 +1,4 @@
+
 import { Module } from '@nestjs/common';
 import { PassportModule } from '@nestjs/passport';
 import { BullModule } from '@nestjs/bull';
@@ -6,12 +7,14 @@ import { AuthService } from './auths.service';
 import { JwtStrategy } from './strategies/jwt.strategies';
 import { TokensModule } from '../../modules/tokens/tokens.module';
 import { CloudinaryModule } from '../../modules/cloudinary/cloudinary.module';
+import { MailModule } from '@modules/email/email.module';
 
 @Module({
   imports: [
     PassportModule.register({ defaultStrategy: 'jwt' }),
     TokensModule,
     CloudinaryModule,
+    MailModule,
     BullModule.registerQueue({ name: 'notifications' }),
   ],
   controllers: [AuthController],

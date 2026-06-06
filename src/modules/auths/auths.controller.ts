@@ -25,6 +25,8 @@ import type { JwtPayload } from './strategies/jwt.strategies';
 import { AuthService } from './auths.service';
 import { RegisterDto } from './dto/register.dto';
 import {
+  ForgotPasswordDto } from './dto/forgot-password.dto';
+import {
   AuthTokensResponse,
   LoginDto,
   LogoutDto,
@@ -32,6 +34,8 @@ import {
   RegisterResponse,
 } from './dto/auth.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { VerifyOtpDto } from './dto/verify-dto';
 import { imageFileFilter, MAX_PROFILE_PICTURE_BYTES } from './auths.constant';
 
 @ApiTags('Authentication')
@@ -39,7 +43,7 @@ import { imageFileFilter, MAX_PROFILE_PICTURE_BYTES } from './auths.constant';
 export class AuthController {
   constructor(private readonly authService: AuthService) {}
 
-  // GET /auth/roles
+  // ─── GET /auth/roles ───────────────────────────────────────────────────────
 
   @Get('roles')
   @ApiOperation({
@@ -69,7 +73,7 @@ export class AuthController {
     return this.authService.getRoles();
   }
 
-  // POST /auth/register
+  // ─── POST /auth/register ───────────────────────────────────────────────────
 
   @Post('register')
   @ApiOperation({
@@ -340,4 +344,44 @@ export class AuthController {
       dto.newPassword,
     );
   }
+  // ── Forgot password ────────────────────────────────────────────────────────
+
+  @Post('forgot-password')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Request a password reset OTP',
+    description:
+      'Sends a 6-digit OTP to the registered email. ' +
+      'Always returns 200 regardless of whether the email exists (security).',
+  })
+  @ApiBody({ type: ForgotPasswordDto })
+  async forgotPassword(@Body() dto: ForgotPasswordDto) {
+    await this.authService.forgotPassword(dto.email);
+    return { message: 'If that email is registered, an OTP has been sent.' };
+  }
+
+  @Post('verify-otp')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Verify a password reset OTP',
+    description: 'Returns { valid: true } if the OTP matches and has not expired.',
+  })
+  @ApiBody({ type: VerifyOtpDto })
+  async verifyOtp(@Body() dto: VerifyOtpDto) {
+    return this.authService.verifyOtp(dto.email, dto.otp);
+  }
+
+  @Post('reset-password')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  @ApiOperation({
+    summary: 'Reset password using OTP',
+    description:
+      'Verifies the OTP and sets a new password. ' +
+      'All existing refresh tokens are revoked — user must log in again.',
+  })
+  @ApiBody({ type: ResetPasswordDto })
+  async resetPassword(@Body() dto: ResetPasswordDto) {
+    await this.authService.resetPassword(dto.email, dto.otp, dto.newPassword);
+  }
+
 }

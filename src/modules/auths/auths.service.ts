@@ -10,6 +10,7 @@ import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import * as bcrypt from 'bcryptjs';
 import { PrismaService } from '@common/prisma/prisma.service';
+import { MailService } from '@modules/email/email.service';
 import { CloudinaryService } from '@modules/cloudinary/cloudinary.service';
 import { TokenService } from '@modules/tokens/tokens.service';
 import { resolveRegion, generateEmployeeRef } from '@common/utils/region.util';
@@ -22,6 +23,7 @@ import type { LoginDto, AuthTokensResponse, RegisterResponse } from './dto/auth.
 export class AuthService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly mail: MailService,
     private readonly tokenService: TokenService,
     private readonly cloudinary: CloudinaryService,
     private readonly config: ConfigService<AppConfig>,
@@ -100,7 +102,6 @@ export class AuthService {
       { userId: user.id, roleLabel },
       { attempts: 3, backoff: { type: 'exponential', delay: 5000 } },
     );
-    console.log('>>> ID card job queued for', user.id); 
 
     return {
       userId: user.id,
@@ -211,4 +212,115 @@ export class AuthService {
     const { getAllRoles } = require('@common/utils/role.util');
     return getAllRoles();
   }
+  // ── Forgot password ────────────────────────────────────────────────────────
+
+  async forgotPassword(email: string): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true, fullName: true, isActive: true },
+    });
+
+    // Always return success — never reveal whether email exists (security)
+    if (!user || !user.isActive) return;
+
+    // Generate 6-digit OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpHash = await bcrypt.hash(otp, 10);
+
+    // Invalidate any existing unused OTPs for this user
+    await this.prisma.passwordResetOtp.updateMany({
+      where: { userId: user.id, isUsed: false },
+      data: { isUsed: true },
+    });
+
+    // Save new OTP — expires in 15 minutes
+    await this.prisma.passwordResetOtp.create({
+      data: {
+        userId:    user.id,
+        otpHash,
+        expiresAt: new Date(Date.now() + 15 * 60 * 1000),
+      },
+    });
+
+    // Send OTP email — fire and forget to keep response fast
+    void this.mail.sendForgotPasswordEmail({
+      to:       email,
+      fullName: user.fullName,
+      otp,
+    });
+  }
+
+  async verifyOtp(email: string, otp: string): Promise<{ valid: boolean }> {
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true },
+    });
+
+    if (!user) return { valid: false };
+
+    const record = await this.prisma.passwordResetOtp.findFirst({
+      where: {
+        userId:   user.id,
+        isUsed:   false,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!record) return { valid: false };
+
+    const matches = await bcrypt.compare(otp, record.otpHash);
+    return { valid: matches };
+  }
+
+  async resetPassword(
+    email:       string,
+    otp:         string,
+    newPassword: string,
+  ): Promise<void> {
+    const user = await this.prisma.user.findUnique({
+      where: { email },
+      select: { id: true },
+    });
+
+    if (!user) throw new BadRequestException('Invalid or expired OTP');
+
+    const record = await this.prisma.passwordResetOtp.findFirst({
+      where: {
+        userId:   user.id,
+        isUsed:   false,
+        expiresAt: { gt: new Date() },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+
+    if (!record) throw new BadRequestException('Invalid or expired OTP');
+
+    const matches = await bcrypt.compare(otp, record.otpHash);
+    if (!matches) throw new BadRequestException('Invalid or expired OTP');
+
+    const rounds = this.config.get<number>('bcryptRounds') ?? 12;
+    const passwordHash = await bcrypt.hash(newPassword, rounds);
+
+    // Mark OTP as used and update password atomically
+    await this.prisma.$transaction([
+      this.prisma.passwordResetOtp.update({
+        where: { id: record.id },
+        data:  { isUsed: true },
+      }),
+      this.prisma.user.update({
+        where: { id: user.id },
+        data: {
+          passwordHash,
+          mustChangePassword: false,
+        },
+      }),
+      // Revoke all refresh tokens — force re-login
+      this.prisma.refreshToken.updateMany({
+        where: { userId: user.id, isRevoked: false },
+        data:  { isRevoked: true },
+      }),
+    ]);
+  }
+
 }

@@ -8,7 +8,7 @@ import { BullModule } from '@nestjs/bull';
 
 import appConfig from '@common/config/app.config';
 import { validateEnv } from '@common/config/env.validation';
-import type { AppConfig } from '@common/config/app.config';
+//import type { AppConfig } from '@common/config/app.config';
 
 import { PrismaModule } from '@common/prisma/prisma.module';
 import { CloudinaryModule } from '@modules/cloudinary/cloudinary.module';

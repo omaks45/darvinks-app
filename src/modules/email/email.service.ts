@@ -70,6 +70,22 @@ export class MailService {
     this.logger.log(`Password reset email sent → ${to}`);
   }
 
+  // ── Forgot password OTP email ─────────────────────────────────────────────
+
+  async sendForgotPasswordEmail(payload: {
+    to:       string;
+    fullName: string;
+    otp:      string;
+  }): Promise<void> {
+    const { to, fullName, otp } = payload;
+
+    const subject = 'TB DARVINKS — Password Reset OTP';
+    const html    = this.buildForgotPasswordHtml({ fullName, otp });
+
+    await this.send({ to, subject, html });
+    this.logger.log(`Forgot password OTP sent → ${to}`);
+  }
+
   // ── Core send ──────────────────────────────────────────────────────────────
 
   private async send(opts: { to: string; subject: string; html: string }): Promise<void> {
@@ -206,6 +222,111 @@ export class MailService {
               </p>
               <p style="margin:0;font-size:11px;color:#aaa;">
                 This email was sent to ${data.employeeRef}. Do not share your credentials.
+              </p>
+            </td>
+          </tr>
+
+        </table>
+      </td>
+    </tr>
+  </table>
+
+</body>
+</html>`;
+  }
+
+  private buildForgotPasswordHtml(data: {
+    fullName: string;
+    otp:      string;
+  }): string {
+    return `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Password Reset OTP — TB DARVINKS</title>
+</head>
+<body style="margin:0;padding:0;background:#f4f4f4;font-family:'Helvetica Neue',Arial,sans-serif;">
+
+  <table width="100%" cellpadding="0" cellspacing="0" style="background:#f4f4f4;padding:40px 0;">
+    <tr>
+      <td align="center">
+        <table width="600" cellpadding="0" cellspacing="0"
+                style="background:#ffffff;border-radius:12px;overflow:hidden;box-shadow:0 2px 12px rgba(0,0,0,0.08);">
+
+          <!-- Header -->
+          <tr>
+            <td style="background:linear-gradient(135deg,#5C0F18 0%,#8B1520 100%);padding:36px 40px;text-align:center;">
+              <img src="cid:\${LOGO_CID}" alt="DarVinks" width="60" height="60"
+                    style="display:block;margin:0 auto 12px;" />
+              <p style="margin:0;font-size:11px;font-weight:700;letter-spacing:0.2em;
+                        color:rgba(255,255,255,0.7);text-transform:uppercase;">
+                DARVINKS HEALTHCARE
+              </p>
+            </td>
+          </tr>
+
+          <!-- Body -->
+          <tr>
+            <td style="padding:40px 40px 24px;">
+              <h2 style="margin:0 0 8px;font-size:22px;font-weight:700;color:#1a1a1a;">
+                Reset Your Password
+              </h2>
+              <p style="margin:0 0 24px;font-size:15px;color:#555;line-height:1.6;">
+                Hi \${data.fullName}, we received a request to reset your
+                TB DARVINKS password. Use the OTP below to proceed.
+              </p>
+
+              <!-- OTP box -->
+              <table width="100%" cellpadding="0" cellspacing="0"
+                      style="margin-bottom:24px;">
+                <tr>
+                  <td align="center"
+                      style="background:#fdf6f7;border:2px dashed #8B1520;border-radius:12px;
+                              padding:32px 40px;">
+                    <p style="margin:0 0 8px;font-size:11px;font-weight:700;
+                              letter-spacing:0.2em;color:#8B1520;text-transform:uppercase;">
+                      Your One-Time Password
+                    </p>
+                    <p style="margin:0;font-size:42px;font-weight:700;
+                              letter-spacing:0.25em;color:#1a1a1a;font-family:monospace;">
+                      \${data.otp}
+                    </p>
+                    <p style="margin:8px 0 0;font-size:12px;color:#888;">
+                      Expires in <strong>15 minutes</strong>
+                    </p>
+                  </td>
+                </tr>
+              </table>
+
+              <!-- Warning -->
+              <table width="100%" cellpadding="0" cellspacing="0"
+                      style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;
+                            margin-bottom:24px;">
+                <tr>
+                  <td style="padding:16px 20px;">
+                    <p style="margin:0;font-size:13px;color:#92400e;line-height:1.6;">
+                        <strong>Never share this OTP with anyone.</strong>
+                      If you did not request a password reset, ignore this email —
+                      your account is still secure.
+                    </p>
+                  </td>
+                </tr>
+              </table>
+            </td>
+          </tr>
+
+          <!-- Footer -->
+          <tr>
+            <td style="background:#f8f8f8;padding:24px 40px;border-top:1px solid #eee;
+                        text-align:center;">
+              <p style="margin:0 0 4px;font-size:12px;color:#888;">
+                Darvinks Healthcare Ltd &nbsp;·&nbsp;
+                1 African Church Close, Off Coker Road, Ilupeju Lagos, Nigeria
+              </p>
+              <p style="margin:0;font-size:11px;color:#aaa;">
+                This OTP was requested from the TB DARVINKS mobile app.
               </p>
             </td>
           </tr>

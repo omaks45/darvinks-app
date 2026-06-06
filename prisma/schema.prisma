@@ -11,19 +11,21 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
+
+
 // ═════════════════════════════════════════════════════════════════════════════
 // ENUMS
 // ═════════════════════════════════════════════════════════════════════════════
 
 enum UserTier {
-  TIER1
-  TIER2
-  TIER3
-  TIER4
+  TIER1                // Merchandiser / Promoter / DBSR / VSR
+  TIER2                // Sales Representative / SSR
+  TIER3                // ATSM / TSM
+  TIER4                // Zonal Sales Manager
   TIER5_SALES_HEAD
   TIER5_SYSTEM_ADMIN
-  TIER5_WAREHOUSE
   TIER6_GM
+  WAREHOUSE_ADMIN
 }
 
 enum UserRole {
@@ -62,11 +64,13 @@ enum Team {
 }
 
 enum Region {
+  // Team Bright
   NORTH_BRIGHT
   SS1
   SS2
   SS3
   SE1
+  // Team Radiant
   LAGOS_1
   LAGOS_2
   NORTH_CENTRAL
@@ -179,53 +183,52 @@ enum TargetPeriod {
 // ═════════════════════════════════════════════════════════════════════════════
 
 model User {
-  id                String         @id @default(uuid())
-  employeeRef       String         @unique
-  fullName          String
-  email             String         @unique
-  phone             String         @unique
-  passwordHash      String
-  role              UserRole
-  roleLabel         String
-  tier              UserTier
-  accountOrigin     AccountOrigin  @default(SELF_REGISTERED)
-  mustChangePassword Boolean       @default(false) // true for provisioned accounts on first login
+  id                 String             @id @default(uuid())
+  employeeRef        String             @unique
+  fullName           String
+  email              String             @unique
+  phone              String             @unique
+  passwordHash       String
 
-  // Team — null for SYSTEM_ADMIN, WAREHOUSE_ADMIN, TIER6_GM
-  // Required for all field staff and SALES_HEAD
-  team              Team?
+  // Role + tier (tier is derived from role at registration)
+  role               UserRole
+  roleLabel          String
+  tier               UserTier
 
-  // Region — null for SALES_HEAD, SYSTEM_ADMIN, WAREHOUSE_ADMIN, TIER6_GM
-  // Auto-assigned from state for field staff (Tiers 1–4)
-  region            Region?
+  // Account type
+  accountOrigin      AccountOrigin      @default(SELF_REGISTERED)
+  mustChangePassword Boolean            @default(false)
 
-  // State — null for back-office roles (T5 admin, T5 warehouse, T6 GM, T5 sales head)
-  state             String?
+  // Team / region / state — null for back-office roles
+  team               Team?
+  region             Region?
+  state              String?
 
-  dateOfBirth       DateTime?      // Optional for provisioned back-office accounts
-  profilePictureUrl String?
-  idCardUrl         String?
-  isActive          Boolean        @default(true)
-  fcmToken          String?
+  dateOfBirth        DateTime?
+  profilePictureUrl  String?
+  idCardUrl          String?
+  isActive           Boolean            @default(true)
+  fcmToken           String?
 
-  // Annual sales targets by SKU category: { "LOTION": 500, "SOAP": 300, ... }
-  // Set at registration; editable by Tier5/System Admin only
-  annualTargets     Json               @default("{}")
+  // Annual targets stored as JSON: { "LOTION": 500, "SOAP": 300, ... }
+  annualTargets      Json               @default("{}")
 
-  // Warehouse Admin scope — only populated for TIER5_WAREHOUSE
-  warehouseLocation WarehouseLocation?
+  // Warehouse Admin scope — only populated for WAREHOUSE_ADMIN
+  warehouseLocation  WarehouseLocation?
 
   // Who provisioned this account (null for self-registered)
-  provisionedById   String?
-  provisionedBy     User?          @relation("ProvisionedBy", fields: [provisionedById], references: [id])
-  provisionedUsers  User[]         @relation("ProvisionedBy")
+  provisionedById    String?
+  provisionedBy      User?              @relation("ProvisionedBy", fields: [provisionedById], references: [id])
+  provisionedUsers   User[]             @relation("ProvisionedBy")
 
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+  lastLogoutAt       DateTime?
 
-  // Relations
+  // ── Relations ──────────────────────────────────────────────────────────────
   refreshTokens              RefreshToken[]
   attendanceEvents           AttendanceEvent[]
+  passwordResets             PasswordResetOtp[]
   purchaseOrdersCreated      PurchaseOrder[]       @relation("POCreatedBy")
   purchaseOrdersApproved     PurchaseOrder[]       @relation("POApprovedBy")
   purchaseOrdersDelivered    PurchaseOrder[]       @relation("PODeliveredBy")
@@ -238,10 +241,7 @@ model User {
   stockMovements             StockMovement[]       @relation("StockMovedBy")
   stockAdjustments           StockMovement[]       @relation("StockAdjustedBy")
   ownedCustomers             Customer[]            @relation("CustomerOwner")
-
-  // Target assignments — targets this user has assigned downward to others
   targetsAssigned            TargetAssignment[]    @relation("AssignedBy")
-  // Target assignments — targets this user has received from their superior
   targetsReceived            TargetAssignment[]    @relation("AssignedTo")
 
   @@index([tier])
@@ -268,19 +268,31 @@ model RefreshToken {
   @@index([expiresAt])
 }
 
+model PasswordResetOtp {
+  id        String   @id @default(uuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  otpHash   String   // bcrypt hash of the 6-digit OTP — never store plain text
+  expiresAt DateTime // 15 minutes from creation
+  isUsed    Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
 model AttendanceEvent {
   id          String         @id @default(uuid())
   userId      String
   user        User           @relation(fields: [userId], references: [id], onDelete: Cascade)
   type        AttendanceType
   flag        AttendanceFlag @default(ON_TIME)
-  photoUrl    String
+  photoUrl    String         // Cloudinary URL — watermarked with GPS + timestamp
   latitude    Float
   longitude   Float
-  address     String?
-  deviceTime  DateTime
+  address     String?        // Resolved via Google Maps geocoding (Phase 4)
+  deviceTime  DateTime       // Timestamp reported by device (supports offline sync)
   serverTime  DateTime       @default(now())
-  kdAccountId String?
+  kdAccountId String?        // Populated for KD_VISIT events
   kdAccount   Customer?      @relation(fields: [kdAccountId], references: [id])
   note        String?
 
@@ -292,36 +304,24 @@ model AttendanceEvent {
 
 // ─────────────────────────────────────────────────────────────────────────────
 // TARGET ASSIGNMENTS
-// Tracks who assigned what target to whom, at which period.
-// Rules:
-//   - Only the assigner can edit or revoke an assignment
-//   - A user can only assign up to their own received target amount
-//   - Sales Head originates targets (no assignedById — they set targets themselves)
 // ─────────────────────────────────────────────────────────────────────────────
 
 model TargetAssignment {
-  id              String          @id @default(uuid())
-
-  // Who assigned this target (null = Sales Head originated it)
-  assignedById    String?
-  assignedBy      User?           @relation("AssignedBy", fields: [assignedById], references: [id])
-
-  // Who received this target
-  assignedToId    String
-  assignedTo      User            @relation("AssignedTo", fields: [assignedToId], references: [id])
-
-  category        ProductCategory // LOTION | SOAP | CREAM | MAINTENANCE
-  period          TargetPeriod    @default(ANNUAL)
-  year            Int             // e.g. 2026
-  quarter         Int?            // 1–4 (null for ANNUAL)
-  month           Int?            // 1–12 (null for ANNUAL/QUARTERLY)
-  week            Int?            // ISO week number (null for non-weekly)
-
-  targetCartons   Int             // Target quantity in cartons
-  note            String?
-
-  createdAt       DateTime        @default(now())
-  updatedAt       DateTime        @updatedAt
+  id            String          @id @default(uuid())
+  assignedById  String?
+  assignedBy    User?           @relation("AssignedBy", fields: [assignedById], references: [id])
+  assignedToId  String
+  assignedTo    User            @relation("AssignedTo", fields: [assignedToId], references: [id])
+  category      ProductCategory
+  period        TargetPeriod    @default(ANNUAL)
+  year          Int
+  quarter       Int?
+  month         Int?
+  week          Int?
+  targetCartons Int
+  note          String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
 
   @@unique([assignedToId, category, period, year, quarter, month, week])
   @@index([assignedById])
@@ -452,37 +452,37 @@ model StockMovement {
 // ═════════════════════════════════════════════════════════════════════════════
 
 model PurchaseOrder {
-  id                   String               @id @default(uuid())
-  orderRef             String               @unique
-  customerId           String
-  customer             Customer             @relation(fields: [customerId], references: [id])
-  warehouseLocation    WarehouseLocation
-  status               PurchaseOrderStatus  @default(PENDING_APPROVAL)
-  qualification        InvoiceQualification @default(PENDING)
-  subtotalKobo         Int
-  creditAppliedKobo    Int                  @default(0)
-  totalKobo            Int
-  paidKobo             Int                  @default(0)
-  cashDiscountKobo     Int                  @default(0)
-  incentiveKobo        Int                  @default(0)
-  kdInvoiceUrl         String?
-  chequeUrl            String?
-  formalInvoiceUrl     String?
-  deliveryOrderUrl     String?
-  invoiceMismatch      Json?
-  createdById          String
-  createdBy            User                 @relation("POCreatedBy", fields: [createdById], references: [id])
-  approvedById         String?
-  approvedBy           User?                @relation("POApprovedBy", fields: [approvedById], references: [id])
-  deliveredById        String?
-  deliveredBy          User?                @relation("PODeliveredBy", fields: [deliveredById], references: [id])
-  approvedAt           DateTime?
-  deliveredAt          DateTime?
-  paymentDeadline      DateTime?
-  fullyPaidAt          DateTime?
-  note                 String?
-  createdAt            DateTime             @default(now())
-  updatedAt            DateTime             @updatedAt
+  id                String               @id @default(uuid())
+  orderRef          String               @unique
+  customerId        String
+  customer          Customer             @relation(fields: [customerId], references: [id])
+  warehouseLocation WarehouseLocation
+  status            PurchaseOrderStatus  @default(PENDING_APPROVAL)
+  qualification     InvoiceQualification @default(PENDING)
+  subtotalKobo      Int
+  creditAppliedKobo Int                  @default(0)
+  totalKobo         Int
+  paidKobo          Int                  @default(0)
+  cashDiscountKobo  Int                  @default(0)
+  incentiveKobo     Int                  @default(0)
+  kdInvoiceUrl      String?
+  chequeUrl         String?
+  formalInvoiceUrl  String?
+  deliveryOrderUrl  String?
+  invoiceMismatch   Json?
+  createdById       String
+  createdBy         User                 @relation("POCreatedBy", fields: [createdById], references: [id])
+  approvedById      String?
+  approvedBy        User?                @relation("POApprovedBy", fields: [approvedById], references: [id])
+  deliveredById     String?
+  deliveredBy       User?                @relation("PODeliveredBy", fields: [deliveredById], references: [id])
+  approvedAt        DateTime?
+  deliveredAt       DateTime?
+  paymentDeadline   DateTime?
+  fullyPaidAt       DateTime?
+  note              String?
+  createdAt         DateTime             @default(now())
+  updatedAt         DateTime             @updatedAt
 
   items          PurchaseOrderItem[]
   payments       PaymentRecord[]
