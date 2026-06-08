@@ -1,4 +1,4 @@
-// prisma/schema.prisma
+
 // TB DARVINKS — Complete Schema (All Phases)
 // ORM: Prisma | DB: Neon (PostgreSQL)
 
@@ -11,7 +11,6 @@ generator client {
 datasource db {
   provider = "postgresql"
 }
-
 
 // ═════════════════════════════════════════════════════════════════════════════
 // ENUMS
@@ -243,6 +242,7 @@ model User {
   ownedCustomers             Customer[]            @relation("CustomerOwner")
   targetsAssigned            TargetAssignment[]    @relation("AssignedBy")
   targetsReceived            TargetAssignment[]    @relation("AssignedTo")
+  invitesSent                InviteToken[]         @relation("InviteCreatedBy")
 
   @@index([tier])
   @@index([role])
@@ -278,6 +278,25 @@ model PasswordResetOtp {
   createdAt DateTime @default(now())
 
   @@index([userId])
+}
+
+model InviteToken {
+  id          String    @id @default(uuid())
+  token       String    @unique  // secure random token sent in the invite link
+  email       String             // pre-assigned email — only this email can use the invite
+  role        UserRole           // pre-assigned role — user cannot change this
+  team        Team?              // required for SALES_HEAD
+  warehouseLocation WarehouseLocation? // required for WAREHOUSE_ADMIN
+  createdById String
+  createdBy   User      @relation("InviteCreatedBy", fields: [createdById], references: [id])
+  isUsed      Boolean   @default(false)
+  expiresAt   DateTime           // 48 hours from creation
+  usedAt      DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([token])
+  @@index([email])
+  @@index([createdById])
 }
 
 model AttendanceEvent {

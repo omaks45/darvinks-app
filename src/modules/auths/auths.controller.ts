@@ -1,10 +1,11 @@
-// src/modules/auth/auth.controller.ts
+
 import {
   Body,
   Controller,
   Get,
   HttpCode,
   HttpStatus,
+  Param,
   Post,
   UploadedFile,
   UseGuards,
@@ -26,6 +27,10 @@ import { AuthService } from './auths.service';
 import { RegisterDto } from './dto/register.dto';
 import {
   ForgotPasswordDto } from './dto/forgot-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { VerifyOtpDto } from './dto/verify-dto';
+import { AdminService } from '../admin/admin.service';
+import { RegisterWithInviteDto } from './dto/register-invite.dto';
 import {
   AuthTokensResponse,
   LoginDto,
@@ -34,14 +39,15 @@ import {
   RegisterResponse,
 } from './dto/auth.dto';
 import { ChangePasswordDto } from './dto/change-password.dto';
-import { ResetPasswordDto } from './dto/reset-password.dto';
-import { VerifyOtpDto } from './dto/verify-dto';
 import { imageFileFilter, MAX_PROFILE_PICTURE_BYTES } from './auths.constant';
 
 @ApiTags('Authentication')
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly authService: AuthService) {}
+  constructor(
+    private readonly authService: AuthService,
+    private readonly adminService: AdminService,
+  ) {}
 
   // ─── GET /auth/roles ───────────────────────────────────────────────────────
 
@@ -382,6 +388,38 @@ export class AuthController {
   @ApiBody({ type: ResetPasswordDto })
   async resetPassword(@Body() dto: ResetPasswordDto) {
     await this.authService.resetPassword(dto.email, dto.otp, dto.newPassword);
+  }
+
+  // ── Invite-based registration ──────────────────────────────────────────────
+
+  @Get('invite/:token')
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({
+    summary: 'Validate an invite token',
+    description:
+      'Returns the pre-assigned email, role and team for a valid invite. ' +
+      'Mobile app calls this on the registration screen to pre-fill role info.',
+  })
+  async getInvite(@Param('token') token: string) {
+    return this.adminService.getInvite(token);
+  }
+
+  @Post('register/invite')
+  @HttpCode(HttpStatus.CREATED)
+  @UseInterceptors(FileInterceptor('profilePicture'))
+  @ApiOperation({
+    summary: 'Register using an invite token (Tier 5 & 6)',
+    description:
+      'Back-office staff self-register using an invite link sent by the System Admin. ' +
+      'Role, team and warehouse are locked to the invite — the user cannot change them.',
+  })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({ type: RegisterWithInviteDto })
+  async registerWithInvite(
+    @Body() dto: RegisterWithInviteDto,
+    @UploadedFile() profilePicture?: Express.Multer.File,
+  ) {
+    return this.authService.registerWithInvite(dto, profilePicture);
   }
 
 }

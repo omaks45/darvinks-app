@@ -1,20 +1,22 @@
+// src/modules/admin/admin.service.spec.ts
 import { Test, TestingModule } from '@nestjs/testing';
 import {
-    BadRequestException,
-    ConflictException,
-    ForbiddenException,
-    NotFoundException,
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  NotFoundException,
 } from '@nestjs/common';
 import { getQueueToken } from '@nestjs/bull';
 import { ConfigService } from '@nestjs/config';
 import * as bcrypt from 'bcryptjs';
 import { AdminService } from './admin.service';
+import { MailService } from '@modules/email/email.service';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { UserRole } from '@common/utils/role.utils';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type { ProvisionUserDto } from '../auths/dto/provision-user.dto';
 
-// Mock factories 
+// ─── Mock factories ───────────────────────────────────────────────────────────
 
 const mockPrisma = {
     user: {
@@ -25,21 +27,30 @@ const mockPrisma = {
         update: jest.fn(),
         count: jest.fn(),
     },
+    inviteToken: {
+        findUnique: jest.fn(),
+        updateMany: jest.fn(),
+        create: jest.fn(),
+    },
     refreshToken: {
         updateMany: jest.fn(),
     },
 };
 
 const mockConfig = {
-  get: jest.fn((key: string) => {
-    const cfg: Record<string, unknown> = { bcryptRounds: 10 };
-    return cfg[key];
-  }),
+    get: jest.fn((key: string) => {
+        const cfg: Record<string, unknown> = { bcryptRounds: 10 };
+        return cfg[key];
+    }),
 };
 
 const mockQueue = { add: jest.fn() };
 
-//Fixtures
+const mockMail = {
+    sendInviteEmail: jest.fn(),
+};
+
+// ─── Fixtures ─────────────────────────────────────────────────────────────────
 // DTOs are cast to ProvisionUserDto via `as unknown as ProvisionUserDto` so
 // that the spec can use the full UserRole enum freely without TypeScript
 // narrowing the role to the ProvisionableRole union type.
@@ -125,8 +136,9 @@ describe('AdminService', () => {
         const module: TestingModule = await Test.createTestingModule({
         providers: [
             AdminService,
-            { provide: PrismaService, useValue: mockPrisma },
-            { provide: ConfigService, useValue: mockConfig },
+            { provide: PrismaService,  useValue: mockPrisma },
+            { provide: ConfigService,  useValue: mockConfig },
+            { provide: MailService,    useValue: mockMail },
             { provide: getQueueToken('notifications'), useValue: mockQueue },
         ],
         }).compile();
@@ -841,4 +853,155 @@ describe('AdminService', () => {
         expect(revokeStarted).toBe(true);
         });
     });
+        // ══════════════════════════════════════════════════════════════════════════
+        // createInvite()
+        // ══════════════════════════════════════════════════════════════════════════
+
+        describe('createInvite()', () => {
+            const INVITE_DTO = {
+                email: 'adaeze@darvinks.com',
+                role: 'SALES_HEAD' as any,
+                team: 'BRIGHT' as any,
+            };
+
+            it('throws ForbiddenException when requester is not TIER5_SYSTEM_ADMIN', async () => {
+                await expect(
+                    service.createInvite(NON_ADMIN_REQUESTER, INVITE_DTO),
+                ).rejects.toThrow(ForbiddenException);
+            });
+
+            it('throws ConflictException when email is already registered', async () => {
+                mockPrisma.user.findUnique.mockResolvedValue({ id: 'existing-user' });
+
+                await expect(
+                    service.createInvite(SYSTEM_ADMIN_REQUESTER, INVITE_DTO),
+                ).rejects.toThrow(ConflictException);
+            });
+
+            it('throws BadRequestException when SALES_HEAD invite is missing team', async () => {
+                mockPrisma.user.findUnique.mockResolvedValue(null);
+
+                await expect(
+                    service.createInvite(SYSTEM_ADMIN_REQUESTER, {
+                        ...INVITE_DTO,
+                        team: undefined,
+                    }),
+                ).rejects.toThrow(BadRequestException);
+            });
+
+            it('throws BadRequestException when WAREHOUSE_ADMIN invite is missing warehouseLocation', async () => {
+                mockPrisma.user.findUnique.mockResolvedValue(null);
+
+                await expect(
+                    service.createInvite(SYSTEM_ADMIN_REQUESTER, {
+                        email: 'wa@darvinks.com',
+                        role: 'WAREHOUSE_ADMIN' as any,
+                    }),
+                ).rejects.toThrow(BadRequestException);
+            });
+
+            it('creates invite and returns token + expiresAt', async () => {
+                mockPrisma.user.findUnique.mockResolvedValue(null);
+                mockPrisma.inviteToken.updateMany.mockResolvedValue({ count: 0 });
+                mockPrisma.inviteToken.create.mockResolvedValue({ id: 'invite-id' });
+                mockMail.sendInviteEmail.mockResolvedValue(undefined);
+
+                const result = await service.createInvite(
+                    SYSTEM_ADMIN_REQUESTER,
+                    INVITE_DTO,
+                );
+
+                expect(result.inviteToken).toBeDefined();
+                expect(result.expiresAt).toBeInstanceOf(Date);
+                expect(result.message).toContain(INVITE_DTO.email);
+            });
+
+            it('invalidates previous unused invites for the same email', async () => {
+                mockPrisma.user.findUnique.mockResolvedValue(null);
+                mockPrisma.inviteToken.updateMany.mockResolvedValue({ count: 1 });
+                mockPrisma.inviteToken.create.mockResolvedValue({ id: 'invite-id' });
+
+                await service.createInvite(SYSTEM_ADMIN_REQUESTER, INVITE_DTO);
+
+                expect(mockPrisma.inviteToken.updateMany).toHaveBeenCalledWith({
+                    where: { email: INVITE_DTO.email, isUsed: false },
+                    data:  { isUsed: true },
+                });
+            });
+
+            it('sends invite email fire-and-forget after token creation', async () => {
+                mockPrisma.user.findUnique.mockResolvedValue(null);
+                mockPrisma.inviteToken.updateMany.mockResolvedValue({ count: 0 });
+                mockPrisma.inviteToken.create.mockResolvedValue({ id: 'invite-id' });
+                mockMail.sendInviteEmail.mockResolvedValue(undefined);
+
+                await service.createInvite(SYSTEM_ADMIN_REQUESTER, INVITE_DTO);
+
+                // fire-and-forget — give it a tick
+                await new Promise(resolve => setImmediate(resolve));
+
+                expect(mockMail.sendInviteEmail).toHaveBeenCalledWith(
+                    expect.objectContaining({
+                        to:       INVITE_DTO.email,
+                        roleLabel: 'Sales Head',
+                    }),
+                );
+            });
+        });
+
+        // ══════════════════════════════════════════════════════════════════════════
+        // getInvite()
+        // ═════════════════════════════════════════════════════════════════════════════════════
+
+        describe('getInvite()', () => {
+            const VALID_INVITE = {
+                email:             'adaeze@darvinks.com',
+                role:              'SALES_HEAD',
+                team:              'BRIGHT',
+                warehouseLocation: null,
+                isUsed:            false,
+                expiresAt:         new Date(Date.now() + 24 * 60 * 60 * 1000),
+            };
+
+            it('returns invite details for a valid token', async () => {
+                mockPrisma.inviteToken.findUnique.mockResolvedValue(VALID_INVITE);
+
+                const result = await service.getInvite('valid-token');
+
+                expect(result.email).toBe('adaeze@darvinks.com');
+                expect(result.role).toBe('SALES_HEAD');
+                expect(result.roleLabel).toBe('Sales Head');
+            });
+
+            it('throws BadRequestException for unknown token', async () => {
+                mockPrisma.inviteToken.findUnique.mockResolvedValue(null);
+
+                await expect(service.getInvite('bad-token')).rejects.toThrow(
+                    BadRequestException,
+                );
+            });
+
+            it('throws BadRequestException when invite is already used', async () => {
+                mockPrisma.inviteToken.findUnique.mockResolvedValue({
+                    ...VALID_INVITE,
+                    isUsed: true,
+                });
+
+                await expect(service.getInvite('used-token')).rejects.toThrow(
+                    BadRequestException,
+                );
+            });
+
+            it('throws BadRequestException when invite has expired', async () => {
+                mockPrisma.inviteToken.findUnique.mockResolvedValue({
+                    ...VALID_INVITE,
+                    expiresAt: new Date(Date.now() - 1000), // expired 1 second ago
+                });
+
+                await expect(service.getInvite('expired-token')).rejects.toThrow(
+                    BadRequestException,
+                );
+            });
+        });
+
 });

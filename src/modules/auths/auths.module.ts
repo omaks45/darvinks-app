@@ -8,6 +8,7 @@ import { JwtStrategy } from './strategies/jwt.strategies';
 import { TokensModule } from '../../modules/tokens/tokens.module';
 import { CloudinaryModule } from '../../modules/cloudinary/cloudinary.module';
 import { MailModule } from '@modules/email/email.module';
+import { AdminModule } from '@modules/admin/admin.module';
 
 @Module({
   imports: [
@@ -15,6 +16,7 @@ import { MailModule } from '@modules/email/email.module';
     TokensModule,
     CloudinaryModule,
     MailModule,
+    AdminModule,
     BullModule.registerQueue({ name: 'notifications' }),
   ],
   controllers: [AuthController],

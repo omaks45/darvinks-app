@@ -1,8 +1,9 @@
-// src/modules/auth/auth.service.ts
+
 import {
   BadRequestException,
   ConflictException,
   Injectable,
+  Logger,
   UnauthorizedException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -18,9 +19,12 @@ import { tierFromRole, labelFromRole } from '@common/utils/role.utils';
 import type { AppConfig } from '@common/config/app.config';
 import type { RegisterDto } from './dto/register.dto';
 import type { LoginDto, AuthTokensResponse, RegisterResponse } from './dto/auth.dto';
+import { RegisterWithInviteDto } from './dto/register-invite.dto';
 
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly mail: MailService,
@@ -321,6 +325,103 @@ export class AuthService {
         data:  { isRevoked: true },
       }),
     ]);
+  }
+
+  // ── Invite-based registration ──────────────────────────────────────────────
+
+  async registerWithInvite(
+    dto: RegisterWithInviteDto,
+    profilePicture?: Express.Multer.File,
+  ) {
+    // 1. Validate invite token
+    const invite = await this.prisma.inviteToken.findUnique({
+      where: { token: dto.inviteToken },
+      select: {
+        id: true, email: true, role: true,
+        team: true, warehouseLocation: true,
+        isUsed: true, expiresAt: true,
+      },
+    });
+
+    if (!invite)              throw new BadRequestException('Invalid invite token');
+    if (invite.isUsed)        throw new BadRequestException('This invite has already been used');
+    if (invite.expiresAt < new Date()) throw new BadRequestException('This invite has expired');
+
+    // 2. Check phone uniqueness — email is locked to invite
+    const phoneExists = await this.prisma.user.findUnique({
+      where: { phone: dto.phone },
+      select: { id: true },
+    });
+    if (phoneExists) throw new ConflictException('Phone number already registered');
+
+    // 3. Hash password
+    const rounds      = this.config.get<number>('bcryptRounds') ?? 12;
+    const passwordHash = await bcrypt.hash(dto.password, rounds);
+
+    // 4. Upload profile picture
+    let profilePictureUrl: string | undefined;
+    if (profilePicture) {
+      const upload = await this.cloudinary.uploadBuffer(
+        profilePicture.buffer,
+        'profiles',
+        { publicId: `${invite.email}-${Date.now()}` },
+      );
+      profilePictureUrl = upload.secure_url;
+    }
+
+    // 5. Derive tier and label from role
+    // Cast to custom UserRole — Prisma's generated enum and the util's
+    // enum are identical at runtime but TypeScript sees them as different types
+    const tier      = tierFromRole(invite.role as any);
+    const roleLabel = labelFromRole(invite.role as any);
+
+    // 6. Generate employee ref
+    const userCount   = await this.prisma.user.count();
+    const seq         = String(userCount + 1).padStart(8, '0');
+    const employeeRef = `Dar-${seq}`;
+
+    // 7. Create user
+    const user = await this.prisma.user.create({
+      data: {
+        employeeRef,
+        fullName:           dto.fullName,
+        email:              invite.email,   // locked to invited email
+        phone:              dto.phone,
+        passwordHash,
+        role:               invite.role,    // locked to invited role
+        roleLabel,
+        tier,
+        team:               invite.team ?? null,
+        warehouseLocation:  invite.warehouseLocation ?? null,
+        dateOfBirth:        new Date(dto.dateOfBirth),
+        profilePictureUrl:  profilePictureUrl ?? null,
+        accountOrigin:      'PROVISIONED',
+        mustChangePassword: false,           // they chose their own password
+        isActive:           true,
+      },
+      select: { id: true, employeeRef: true },
+    });
+
+    // 8. Mark invite as used
+    await this.prisma.inviteToken.update({
+      where: { id: invite.id },
+      data:  { isUsed: true, usedAt: new Date() },
+    });
+
+    // 9. Queue ID card generation
+    void this.notifyQueue.add(
+      'generate-id-card',
+      { userId: user.id, roleLabel },
+      { attempts: 3, backoff: { type: 'exponential', delay: 5000 } },
+    );
+
+    this.logger.log(`Invite registration complete: ${employeeRef} (${roleLabel})`);
+
+    return {
+      userId:      user.id,
+      employeeRef: user.employeeRef,
+      message:     'Registration successful. Your digital ID card will be ready shortly.',
+    };
   }
 
 }

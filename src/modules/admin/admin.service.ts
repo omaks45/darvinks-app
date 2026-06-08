@@ -1,4 +1,4 @@
-// src/modules/admin/admin.service.ts
+
 import {
   BadRequestException,
   ConflictException,
@@ -14,9 +14,8 @@ import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { MailService } from '@modules/email/email.service';
-import { labelFromRole, tierFromRole } from '@common/utils/role.utils';
+import { labelFromRole, tierFromRole, UserRole } from '@common/utils/role.utils';
 import { generateEmployeeRef } from '@common/utils/region.util';
-import { tierFromRole, labelFromRole, UserRole } from '@common/utils/role.utils';
 import type { AppConfig } from '@common/config/app.config';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type { ProvisionUserDto, ProvisionUserResponse } from '../auths/dto/provision-user.dto';
