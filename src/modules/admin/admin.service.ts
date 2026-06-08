@@ -11,7 +11,10 @@ import { ConfigService } from '@nestjs/config';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import * as bcrypt from 'bcryptjs';
+import * as crypto from 'crypto';
 import { PrismaService } from '@common/prisma/prisma.service';
+import { MailService } from '@modules/email/email.service';
+import { labelFromRole, tierFromRole } from '@common/utils/role.utils';
 import { generateEmployeeRef } from '@common/utils/region.util';
 import { tierFromRole, labelFromRole, UserRole } from '@common/utils/role.utils';
 import type { AppConfig } from '@common/config/app.config';
@@ -19,6 +22,7 @@ import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type { ProvisionUserDto, ProvisionUserResponse } from '../auths/dto/provision-user.dto';
 import { PROVISIONABLE_ROLES } from '../auths/dto/provision-user.dto';
 import type { UpdateUserDto } from './dto/update-user.dto';
+import { CreateInviteDto } from './dto/invite.dto';
 
 // Fields safe to return — passwordHash is never included
 const USER_SAFE_SELECT = {
@@ -55,9 +59,10 @@ export class AdminService {
     private readonly prisma: PrismaService,
     private readonly config: ConfigService<AppConfig>,
     @InjectQueue('notifications') private readonly notifyQueue: Queue,
+    private readonly mail: MailService,
   ) {}
 
-  // Provision account 
+  // ─── Provision account ────────────────────────────────────────────────────
 
   async provisionUser(
     requester: JwtPayload,
@@ -206,7 +211,7 @@ export class AdminService {
     };
   }
 
-  // Find all users
+  // ─── Find all users ───────────────────────────────────────────────────────
 
   async findAllUsers() {
     return this.prisma.user.findMany({
@@ -368,4 +373,106 @@ export class AdminService {
     }
     return password;
   }
+  // ── Invite management ──────────────────────────────────────────────────────
+
+  async createInvite(
+    requester: JwtPayload,
+    dto: CreateInviteDto,
+  ) {
+    if (requester.tier !== 'TIER5_SYSTEM_ADMIN') {
+      throw new ForbiddenException('Only System Admins can create invites');
+    }
+
+    // Check the email is not already registered
+    const existing = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+      select: { id: true },
+    });
+    if (existing) {
+      throw new ConflictException(
+        `An account with email ${dto.email} already exists`,
+      );
+    }
+
+    // Validate role-specific requirements
+    if (dto.role === 'SALES_HEAD' && !dto.team) {
+      throw new BadRequestException('Team is required for Sales Head');
+    }
+    if (dto.role === 'WAREHOUSE_ADMIN' && !dto.warehouseLocation) {
+      throw new BadRequestException('Warehouse location is required for Warehouse Admin');
+    }
+
+    // Invalidate any existing unused invite for this email
+    await this.prisma.inviteToken.updateMany({
+      where: { email: dto.email, isUsed: false },
+      data:  { isUsed: true },
+    });
+
+    // Generate secure random token
+    const token     = crypto.randomBytes(32).toString('hex');
+    const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48 hours
+
+    await this.prisma.inviteToken.create({
+      data: {
+        token,
+        email:             dto.email,
+        role:              dto.role as any,
+        team:              dto.team ?? null,
+        warehouseLocation: dto.warehouseLocation ?? null,
+        createdById:       requester.sub,
+        expiresAt,
+      },
+    });
+
+    const roleLabel  = labelFromRole(dto.role as any);
+    // The invite URL points to the mobile app deep link or web registration page
+    // Frontend team should configure APP_INVITE_BASE_URL in .env
+    const inviteUrl  = `${process.env.APP_INVITE_BASE_URL ?? 'https://app.darvinks.com/register'}?token=${token}`;
+
+    // Send invite email — fire and forget
+    void this.mail.sendInviteEmail({
+      to:           dto.email,
+      roleLabel,
+      inviteUrl,
+      expiresHours: 48,
+    });
+
+    this.logger.log(
+      `Invite created for ${dto.email} (${roleLabel}) by ${requester.sub}`,
+    );
+
+    return {
+      message:   `Invite sent to ${dto.email}`,
+      expiresAt,
+      // Return token in response so admin can also share it manually if needed
+      inviteToken: token,
+    };
+  }
+
+  async getInvite(token: string) {
+    const invite = await this.prisma.inviteToken.findUnique({
+      where: { token },
+      select: {
+        email:             true,
+        role:              true,
+        team:              true,
+        warehouseLocation: true,
+        isUsed:            true,
+        expiresAt:         true,
+      },
+    });
+
+    if (!invite)              throw new BadRequestException('Invalid invite token');
+    if (invite.isUsed)        throw new BadRequestException('This invite has already been used');
+    if (invite.expiresAt < new Date()) throw new BadRequestException('This invite has expired');
+
+    return {
+      email:             invite.email,
+      role:              invite.role,
+      team:              invite.team,
+      warehouseLocation: invite.warehouseLocation,
+      roleLabel:         labelFromRole(invite.role as any),
+    };
+  }
+
 }
