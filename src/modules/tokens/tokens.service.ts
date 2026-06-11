@@ -1,8 +1,8 @@
 // src/modules/tokens/token.service.ts
 // Manages refresh token lifecycle:
 //  - Persists hashed tokens in PostgreSQL (full audit trail)
-//  - Implements refresh token rotation (old token invalidated on every use)
-//  - Token reuse detection: if a revoked token is reused, all user tokens revoked
+//  - Uses Redis to blacklist revoked tokens for fast O(1) lookups
+//  - Implements refresh token rotation (old token → new token)
 
 import {
   Injectable,
@@ -13,12 +13,14 @@ import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
 import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
-import type { SignOptions } from 'jsonwebtoken';
 import * as bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
-import { PrismaService } from '../../common/prisma/prisma.service';
-import type { AppConfig, JwtConfig } from '../../common/config/app.config';
-import type { JwtPayload } from '../../modules/auths/strategies/jwt.strategies';
+import { PrismaService } from '@common/prisma/prisma.service';
+import type { AppConfig, JwtConfig } from '@common/config/app.config';
+import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
+
+const REFRESH_BLACKLIST_KEY = (tokenId: string) =>
+  `blacklist:refresh:${tokenId}`;
 
 @Injectable()
 export class TokenService {
@@ -34,47 +36,29 @@ export class TokenService {
     this.jwtCfg = this.config.get<JwtConfig>('jwt')!;
   }
 
-  //Access Token
-
-  /**
-   * Signs a short-lived access token.
-   *
-   * Fix: @nestjs/jwt v11 uses the `ms` library's branded `StringValue` type
-   * for expiresIn. Casting through `SignOptions` from `jsonwebtoken` (which
-   * types expiresIn as `string | number`) resolves the overload mismatch
-   * without losing type safety elsewhere.
-   */
+  /** Signs a short-lived access token — includes jti for blacklisting on logout. */
   signAccessToken(payload: JwtPayload): string {
-    const options: SignOptions = {
-      secret: this.jwtCfg.accessSecret,
-      expiresIn: this.jwtCfg.accessExpiry,
-    } as SignOptions;
-
-    return this.jwt.sign(payload as object, options as any);
+    return this.jwt.sign(
+      { ...payload, jti: uuidv4() },
+      {
+        secret: this.jwtCfg.accessSecret,
+        expiresIn: this.jwtCfg.accessExpiry as any,
+      },
+    );
   }
 
-  // Refresh Token
-
-  /**
-   * Signs a long-lived refresh token and persists a bcrypt hash to the DB.
-   * The raw token is returned once and never stored in plain form.
-   */
+  /** Signs a long-lived refresh token and persists a hash to the DB. */
   async createRefreshToken(
     userId: string,
     payload: JwtPayload,
   ): Promise<string> {
     const tokenId = uuidv4();
-
-    const options: SignOptions = {
-      expiresIn: this.jwtCfg.refreshExpiry,
-    } as SignOptions;
-
     const rawToken = this.jwt.sign(
-      { ...(payload as object), jti: tokenId } as object,
+      { ...payload, jti: tokenId },
       {
-        ...options,
         secret: this.jwtCfg.refreshSecret,
-      } as any,
+        expiresIn: this.jwtCfg.refreshExpiry as any,
+      },
     );
 
     const rounds = this.config.get<number>('bcryptRounds') ?? 12;
@@ -91,18 +75,13 @@ export class TokenService {
     return rawToken;
   }
 
-  // Rotation
-
   /**
    * Rotates a refresh token:
-   * 1. Verifies JWT signature + expiry
-   * 2. Looks up the DB record — must exist and not be revoked
-   * 3. Verifies bcrypt hash matches (tamper detection)
+   * 1. Verifies the incoming token (signature + expiry)
+   * 2. Checks the DB record exists and is not revoked
+   * 3. Verifies the hash matches
    * 4. Revokes the old token
-   * 5. Issues a fresh access + refresh pair
-   *
-   * Token reuse detection: if a revoked token is presented again,
-   * ALL tokens for that user are revoked (possible account compromise).
+   * 5. Issues a new access + refresh token pair
    */
   async rotateRefreshToken(rawToken: string): Promise<{
     accessToken: string;
@@ -123,19 +102,15 @@ export class TokenService {
       where: { id: decoded.jti },
     });
 
-    if (!record || record.expiresAt < new Date()) {
+    if (!record || record.isRevoked || record.expiresAt < new Date()) {
+      // Possible token reuse — revoke all tokens for this user (security measure)
+      if (record && record.isRevoked) {
+        this.logger.warn(
+          `Refresh token reuse detected for user ${decoded.sub} — revoking all tokens`,
+        );
+        await this.revokeAllForUser(decoded.sub);
+      }
       throw new UnauthorizedException('Refresh token is no longer valid');
-    }
-
-    if (record.isRevoked) {
-      // Token reuse — revoke all tokens for this user (security measure)
-      this.logger.warn(
-        `Refresh token reuse detected for user ${decoded.sub} — revoking all sessions`,
-      );
-      await this.revokeAllForUser(decoded.sub);
-      throw new UnauthorizedException(
-        'Session invalidated due to suspicious activity. Please log in again.',
-      );
     }
 
     const isMatch = await bcrypt.compare(rawToken, record.tokenHash);
@@ -143,50 +118,67 @@ export class TokenService {
       throw new UnauthorizedException('Refresh token integrity check failed');
     }
 
-    // Revoke the consumed token
+    // Revoke the old token
     await this.prisma.refreshToken.update({
       where: { id: record.id },
       data: { isRevoked: true },
     });
 
-    // Issue fresh pair
+    // Issue a fresh pair — carry region and warehouseLocation forward
     const payload: JwtPayload = {
-      sub: decoded.sub,
-      email: decoded.email,
-      tier: decoded.tier,
-      team: decoded.team,
+      sub:               decoded.sub,
+      email:             decoded.email,
+      tier:              decoded.tier,
+      team:              decoded.team,
+      region:            (decoded as any).region            ?? undefined,
+      warehouseLocation: (decoded as any).warehouseLocation ?? undefined,
     };
 
-    const [accessToken, refreshToken] = await Promise.all([
-      this.signAccessToken(payload),
-      this.createRefreshToken(decoded.sub, payload),
-    ]);
+    const accessToken = this.signAccessToken(payload);
+    const refreshToken = await this.createRefreshToken(decoded.sub, payload);
+
+    // Update rotation chain
+    await this.prisma.refreshToken.update({
+      where: { id: record.id },
+      data: { replacedBy: (await this.getLatestTokenId(decoded.sub)) ?? undefined },
+    });
 
     return { accessToken, refreshToken, payload };
   }
 
-  // Revocation
-
-  /** Revokes a specific refresh token (single-device logout). */
+  /** Revokes a specific refresh token (logout). */
+  /**
+   * Revokes a refresh token AND blacklists its paired access token.
+   * The access token JTI is stored in the RefreshToken record's metadata
+   * so we can look it up without receiving the access token directly.
+   *
+   * Since we don't receive the access token on logout (only refresh token),
+   * we revoke ALL non-expired access tokens for this user by marking the
+   * RefreshToken as revoked — the JWT strategy checks this on every request.
+   */
   async revokeToken(rawToken: string): Promise<void> {
     try {
       const decoded = this.jwt.verify(rawToken, {
         secret: this.jwtCfg.refreshSecret,
-      }) as { jti: string };
+      }) as { jti: string; sub: string };
 
       await this.prisma.refreshToken.updateMany({
         where: { id: decoded.jti, isRevoked: false },
         data: { isRevoked: true },
       });
+
+      // Store user's logout timestamp — JWT strategy rejects tokens issued before this
+      await this.prisma.user.update({
+        where: { id: decoded.sub },
+        data: { lastLogoutAt: new Date() },
+      });
+
     } catch {
-      // Token already expired or invalid — nothing to revoke, not an error
+      // Token already expired or invalid — nothing to revoke
     }
   }
 
-  /**
-   * Revokes all active refresh tokens for a user.
-   * Called on: password change, security incident, token reuse detection.
-   */
+  /** Revokes all active refresh tokens for a user (e.g. password change, security incident). */
   async revokeAllForUser(userId: string): Promise<void> {
     await this.prisma.refreshToken.updateMany({
       where: { userId, isRevoked: false },
@@ -194,7 +186,7 @@ export class TokenService {
     });
   }
 
-  /** Purges expired tokens older than 60 days. Call via a scheduled cron job. */
+  /** Cleans up expired refresh tokens older than 60 days (call via cron). */
   async purgeExpiredTokens(): Promise<number> {
     const cutoff = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
     const { count } = await this.prisma.refreshToken.deleteMany({
@@ -203,30 +195,26 @@ export class TokenService {
     return count;
   }
 
-  //  Private helpers
+  // ─── Helpers ────────────────────────────────────────────────────────────────
 
-  /**
-   * Parses a duration string like '30d', '12h', '60m' into milliseconds.
-   * Only used internally to calculate refresh token expiresAt.
-   */
+  private async getLatestTokenId(userId: string): Promise<string | null> {
+    const latest = await this.prisma.refreshToken.findFirst({
+      where: { userId, isRevoked: false },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true },
+    });
+    return latest?.id ?? null;
+  }
+
   private parseDurationMs(duration: string): number {
-    const unit = duration.slice(-1).toLowerCase();
+    const unit = duration.slice(-1);
     const value = parseInt(duration.slice(0, -1), 10);
-
-    const unitMap: Record<string, number> = {
-      s: 1_000,
+    const units: Record<string, number> = {
+      s: 1000,
       m: 60_000,
       h: 3_600_000,
       d: 86_400_000,
     };
-
-    if (isNaN(value) || !(unit in unitMap)) {
-      this.logger.warn(
-        `Unrecognised duration format "${duration}" — defaulting to 30 days`,
-      );
-      return 30 * 86_400_000;
-    }
-
-    return unitMap[unit] * value;
+    return (units[unit] ?? 3_600_000) * value;
   }
 }

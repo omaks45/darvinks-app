@@ -120,12 +120,14 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email },
       select: {
-        id: true,
-        email: true,
-        passwordHash: true,
-        tier: true,
-        team: true,
-        isActive: true,
+        id:                true,
+        email:             true,
+        passwordHash:      true,
+        tier:              true,
+        team:              true,
+        region:            true,
+        warehouseLocation: true,
+        isActive:          true,
       },
     });
 
@@ -145,10 +147,12 @@ export class AuthService {
     }
 
     const payload = {
-      sub: user.id,
-      email: user.email,
-      tier: user.tier,
-      team: user.team,
+      sub:               user.id,
+      email:             user.email,
+      tier:              user.tier,
+      team:              user.team,
+      region:            user.region    ?? undefined,
+      warehouseLocation: user.warehouseLocation ?? undefined,
     };
 
     const jwtCfg = this.config.get('jwt') as { accessExpiry: string };
