@@ -1,9 +1,11 @@
+
 import { Module } from '@nestjs/common';
-import { WarehouseService } from './warehouse.service';
 import { WarehouseController } from './warehouse.controller';
+import { WarehouseService } from './warehouse.service';
 
 @Module({
   controllers: [WarehouseController],
-  providers: [WarehouseService],
+  providers:   [WarehouseService],
+  exports:     [WarehouseService], // exported for PurchaseOrders module (OUTBOUND_PO movements)
 })
 export class WarehouseModule {}
