@@ -1,4 +1,4 @@
-
+// src/modules/customers/customer.service.spec.ts
 import { Test, TestingModule } from '@nestjs/testing';
 import {
   BadRequestException,
@@ -114,10 +114,11 @@ describe('CustomerService', () => {
       mockPrisma.customer.findFirst.mockResolvedValue(null);
       mockPrisma.customer.create.mockResolvedValue(CUSTOMER);
 
+      // makeRequester defaults to team:RADIANT — resolveRegion('lagos','RADIANT') = LAGOS_2
       await service.create({ ...CREATE_DTO, state: 'lagos' }, makeRequester());
 
       const data = mockPrisma.customer.create.mock.calls[0][0].data;
-      expect(data.region).toBe(Region.LAGOS_1);
+      expect(data.region).toBe(Region.LAGOS_2);
     });
 
     it('throws ConflictException when phone already registered', async () => {
@@ -290,7 +291,9 @@ describe('CustomerService', () => {
         region: Region.SE1,
       });
 
-      await service.update('cust-id', { state: 'enugu' }, makeRequester());
+      // enugu → SE1 only on BRIGHT team; use BRIGHT admin to avoid region restriction
+      const brightAdmin = makeRequester({ tier: 'TIER5_SYSTEM_ADMIN', team: 'BRIGHT' as any });
+      await service.update('cust-id', { state: 'enugu' }, brightAdmin);
 
       const data = mockPrisma.customer.update.mock.calls[0][0].data;
       expect(data.state).toBe('enugu');
@@ -367,8 +370,9 @@ describe('CustomerService', () => {
     });
 
     it('throws BadRequestException when customer is already in requester region', async () => {
-      mockPrisma.customer.findUnique.mockResolvedValue(CUSTOMER); // LAGOS_1
-      const requester = makeRequester({ region: Region.LAGOS_1 });
+      // CUSTOMER.region is LAGOS_2 — requester must match to trigger same-region check
+      mockPrisma.customer.findUnique.mockResolvedValue(CUSTOMER);
+      const requester = makeRequester({ region: Region.LAGOS_2 });
 
       await expect(
         service.requestOutOfRegion('cust-id', {}, requester),
