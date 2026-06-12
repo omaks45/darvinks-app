@@ -1,4 +1,4 @@
-
+// src/modules/purchase-orders/purchase-order.service.ts
 import {
   BadRequestException,
   ForbiddenException,
@@ -9,6 +9,7 @@ import {
 import { PurchaseOrderStatus, WarehouseLocation } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { ProductService } from '@modules/products/products.service';
+import { GoogleVisionService } from '@common/google/google-vision.service';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type {
   CreatePurchaseOrderDto,
@@ -18,7 +19,7 @@ import type {
   PurchaseOrderQueryDto,
 } from './dto/purchase.dto';
 
-//  Role constants
+// ── Role constants ─────────────────────────────────────────────────────────────
 const FIELD_TIERS   = ['TIER1', 'TIER2', 'TIER3', 'TIER4'];
 const APPROVER_TIERS = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD', 'TIER6_GM'];
 const ADMIN_TIERS   = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD', 'TIER6_GM', 'WAREHOUSE_ADMIN'];
@@ -93,8 +94,9 @@ export class PurchaseOrderService {
   private readonly logger = new Logger(PurchaseOrderService.name);
 
   constructor(
-    private readonly prisma: PrismaService,
-    private readonly productService: ProductService,
+    private readonly prisma:          PrismaService,
+    private readonly productService:  ProductService,
+    private readonly vision:          GoogleVisionService,
   ) {}
 
   // ── Create ─────────────────────────────────────────────────────────────────
@@ -211,7 +213,37 @@ export class PurchaseOrderService {
       throw new ForbiddenException('Only Sales Head, System Admin or GM can approve orders');
     }
 
-    const po = await this.assertExists(id);
+    const po = await this.prisma.purchaseOrder.findUnique({
+      where:  { id },
+      select: {
+        id:            true,
+        orderRef:      true,
+        status:        true,
+        totalKobo:     true,
+        paidKobo:      true,
+        createdById:   true,
+        qualification: true,
+        kdInvoiceUrl:  true,
+      },
+    });
+    if (!po) throw new NotFoundException(`Purchase order ${id} not found`);
+
+    // KD invoice must be uploaded before approval
+    if (!po.kdInvoiceUrl) {
+      throw new BadRequestException(
+        'KD invoice must be uploaded before this order can be approved. ' +
+        'The field agent should upload the customer invoice via PATCH /purchase-orders/:id/documents',
+      );
+    }
+
+    // Invoice must be qualified (matched) before approval
+    if (po.qualification !== 'QUALIFIED') {
+      throw new BadRequestException(
+        `Invoice qualification is "${po.qualification}". ` +
+        'The invoice must be reviewed and marked QUALIFIED before approval.',
+      );
+    }
+
     this.assertTransition(po.status, 'APPROVED');
 
     return this.prisma.purchaseOrder.update({
@@ -326,11 +358,83 @@ export class PurchaseOrderService {
       ? { status: 'DO_UPLOADED' as PurchaseOrderStatus }
       : {};
 
-    return this.prisma.purchaseOrder.update({
+    const updated = await this.prisma.purchaseOrder.update({
       where:  { id },
       data:   { [dto.documentType]: dto.url, ...statusUpdate },
-      select: PO_LIST_SELECT,
+      select: {
+        ...PO_LIST_SELECT,
+        items: {
+          select: {
+            productId:       true,
+            quantityCartons: true,
+            unitPriceKobo:   true,
+            lineTotalKobo:   true,
+            product:         { select: { name: true } },
+          },
+        },
+      },
     });
+
+    // Auto-run OCR comparison when the KD invoice is uploaded
+    if (dto.documentType === 'kdInvoiceUrl') {
+      void this.runInvoiceComparison(id, dto.url, updated.items);
+    }
+
+    return updated;
+  }
+
+  /**
+   * Calls Google Vision OCR to extract and compare the KD invoice against
+   * PO line items. Runs fire-and-forget — result updates qualification field.
+   * Sales Head can override the system result if needed.
+   */
+  private async runInvoiceComparison(
+    poId:         string,
+    invoiceUrl:   string,
+    items:        Array<{
+      productId:       string;
+      quantityCartons: number;
+      unitPriceKobo:   number;
+      lineTotalKobo:   number;
+      product:         { name: string };
+    }>,
+  ): Promise<void> {
+    try {
+      this.logger.log(`Running OCR comparison for PO ${poId}...`);
+
+      const poItems = items.map((i) => ({
+        productName:     i.product.name,
+        quantityCartons: i.quantityCartons,
+        unitPriceKobo:   i.unitPriceKobo,
+        lineTotalKobo:   i.lineTotalKobo,
+      }));
+
+      const result = await this.vision.compareInvoiceToPO(invoiceUrl, poItems);
+
+      await this.prisma.purchaseOrder.update({
+        where: { id: poId },
+        data: {
+          qualification:  result.qualified ? 'QUALIFIED' : 'NOT_QUALIFIED',
+          invoiceMismatch: result.qualified
+            ? null
+            : {
+                summary:    result.summary,
+                confidence: result.confidence,
+                mismatches: result.mismatches,
+              } as any,
+        },
+      });
+
+      this.logger.log(
+        `OCR result for PO ${poId}: ${result.qualified ? 'QUALIFIED ✓' : 'NOT_QUALIFIED ✗'} — ${result.summary}`,
+      );
+    } catch (err) {
+      // OCR failure should not block the upload — log and leave qualification as PENDING
+      this.logger.error(
+        `OCR comparison failed for PO ${poId}: ${(err as Error).message}`,
+        (err as Error).stack,
+      );
+    }
   }
 
   // ── Invoice qualification ──────────────────────────────────────────────────

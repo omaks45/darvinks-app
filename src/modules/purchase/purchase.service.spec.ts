@@ -1,4 +1,4 @@
-// src/modules/purchase-orders/purchase-order.service.spec.ts
+
 import { Test, TestingModule } from '@nestjs/testing';
 import {
   BadRequestException,
@@ -10,8 +10,9 @@ import { PurchaseOrderService } from './purchase.service';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { ProductService } from '@modules/products/products.service';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
+import { GoogleVisionService } from '@common/google/google-vision.service';
 
-// ─── Mocks ────────────────────────────────────────────────────────────────────
+// Mocks
 
 const mockPrisma = {
   customer:      { findUnique: jest.fn() },
@@ -30,6 +31,17 @@ const mockPrisma = {
 const mockProductService = {
   // Keep static methods accessible
 };
+
+const mockVision = {
+  compareInvoiceToPO: jest.fn().mockResolvedValue({
+    qualified:  true,
+    summary:    'Invoice matches PO',
+    confidence: 1,
+    mismatches: [],
+  }),
+};
+
+
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
@@ -105,13 +117,22 @@ describe('PurchaseOrderService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PurchaseOrderService,
-        { provide: PrismaService,    useValue: mockPrisma },
-        { provide: ProductService,   useValue: mockProductService },
+        { provide: PrismaService,        useValue: mockPrisma },
+        { provide: ProductService,       useValue: mockProductService },
+        { provide: GoogleVisionService,  useValue: mockVision },
       ],
     }).compile();
 
     service = module.get<PurchaseOrderService>(PurchaseOrderService);
     jest.resetAllMocks();
+    // Default: OCR comparison returns qualified
+    mockVision.compareInvoiceToPO.mockResolvedValue({
+      qualified:    true,
+      confidence:   0.95,
+      matchedLines: [],
+      mismatches:   [],
+      summary:      'All items matched.',
+    });
 
     // Default: transaction executes all ops
     mockPrisma.$transaction.mockImplementation(
@@ -267,19 +288,26 @@ describe('PurchaseOrderService', () => {
   // ── approve ────────────────────────────────────────────────────────────────
 
   describe('approve()', () => {
-    it('approves a PENDING_APPROVAL order', async () => {
-      mockPrisma.purchaseOrder.findUnique.mockResolvedValue(PO_STUB);
+    // A fully ready PO — invoice uploaded and qualified
+    const READY_PO = {
+      ...PO_STUB,
+      qualification: 'QUALIFIED',
+      kdInvoiceUrl:  'https://cloudinary.com/kd-invoice.pdf',
+    };
+
+    it('approves when invoice is uploaded and qualified', async () => {
+      mockPrisma.purchaseOrder.findUnique.mockResolvedValue(READY_PO);
       mockPrisma.purchaseOrder.update.mockResolvedValue({
-        ...PO_STUB, status: 'APPROVED',
+        ...READY_PO, status: 'APPROVED',
       });
 
       const result = await service.approve('po-id', makeSalesHead());
       expect(result.status).toBe('APPROVED');
     });
 
-    it('sets approvedById to the requester', async () => {
-      mockPrisma.purchaseOrder.findUnique.mockResolvedValue(PO_STUB);
-      mockPrisma.purchaseOrder.update.mockResolvedValue({ ...PO_STUB, status: 'APPROVED' });
+    it('sets approvedById and approvedAt', async () => {
+      mockPrisma.purchaseOrder.findUnique.mockResolvedValue(READY_PO);
+      mockPrisma.purchaseOrder.update.mockResolvedValue({ ...READY_PO, status: 'APPROVED' });
 
       await service.approve('po-id', makeSalesHead());
 
@@ -288,15 +316,51 @@ describe('PurchaseOrderService', () => {
       expect(updateData.approvedAt).toBeInstanceOf(Date);
     });
 
+    it('throws BadRequestException when KD invoice has not been uploaded', async () => {
+      mockPrisma.purchaseOrder.findUnique.mockResolvedValue({
+        ...PO_STUB,
+        qualification: 'QUALIFIED',
+        kdInvoiceUrl:  null, // not uploaded yet
+      });
+
+      await expect(
+        service.approve('po-id', makeSalesHead()),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when invoice is PENDING qualification', async () => {
+      mockPrisma.purchaseOrder.findUnique.mockResolvedValue({
+        ...PO_STUB,
+        qualification: 'PENDING',
+        kdInvoiceUrl:  'https://cloudinary.com/kd-invoice.pdf',
+      });
+
+      await expect(
+        service.approve('po-id', makeSalesHead()),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when invoice is NOT_QUALIFIED', async () => {
+      mockPrisma.purchaseOrder.findUnique.mockResolvedValue({
+        ...PO_STUB,
+        qualification: 'NOT_QUALIFIED',
+        kdInvoiceUrl:  'https://cloudinary.com/kd-invoice.pdf',
+      });
+
+      await expect(
+        service.approve('po-id', makeSalesHead()),
+      ).rejects.toThrow(BadRequestException);
+    });
+
     it('throws ForbiddenException for field staff', async () => {
       await expect(
         service.approve('po-id', makeRequester()),
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('throws BadRequestException for invalid transition', async () => {
+    it('throws BadRequestException for invalid status transition', async () => {
       mockPrisma.purchaseOrder.findUnique.mockResolvedValue({
-        ...PO_STUB, status: PurchaseOrderStatus.DELIVERED,
+        ...READY_PO, status: PurchaseOrderStatus.DELIVERED,
       });
       await expect(
         service.approve('po-id', makeSalesHead()),
@@ -450,6 +514,12 @@ describe('PurchaseOrderService', () => {
           mockPrisma.purchaseOrder.update.mockResolvedValue({ ...PO_STUB, status: to });
 
           if (to === 'APPROVED') {
+            // approve() requires kdInvoiceUrl and QUALIFIED — provide them
+            mockPrisma.purchaseOrder.findUnique.mockResolvedValue({
+              ...PO_STUB, status: from,
+              qualification: 'QUALIFIED',
+              kdInvoiceUrl:  'https://cloudinary.com/kd-invoice.pdf',
+            });
             return service.approve('po-id', makeSalesHead());
           }
 
@@ -647,6 +717,103 @@ describe('PurchaseOrderService', () => {
           makeRequester(),
         ),
       ).rejects.toThrow(NotFoundException);
+    });
+
+    it('triggers OCR comparison fire-and-forget when kdInvoiceUrl is uploaded', async () => {
+      const itemsPayload = [{
+        productId: 'prod-id', quantityCartons: 12,
+        unitPriceKobo: 1700000, lineTotalKobo: 1700000,
+        product: { name: 'DarVinks Lotion' },
+      }];
+      mockPrisma.purchaseOrder.findUnique.mockResolvedValue(PO_STUB);
+      // First update call returns doc with items; second (qualify) can return anything
+      mockPrisma.purchaseOrder.update
+        .mockResolvedValueOnce({ ...PO_STUB, items: itemsPayload })
+        .mockResolvedValue({});
+
+      await service.uploadDocument(
+        'po-id',
+        { documentType: 'kdInvoiceUrl', url: 'https://cloudinary.com/invoice.jpg' },
+        makeRequester(),
+      );
+
+      // Give fire-and-forget a tick to execute
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(mockVision.compareInvoiceToPO).toHaveBeenCalledWith(
+        'https://cloudinary.com/invoice.jpg',
+        expect.any(Array),
+      );
+    });
+
+    it('does NOT trigger OCR for non-invoice document types', async () => {
+      mockPrisma.purchaseOrder.findUnique.mockResolvedValue(PO_STUB);
+      mockPrisma.purchaseOrder.update.mockResolvedValue({ ...PO_STUB, items: [] });
+
+      await service.uploadDocument(
+        'po-id',
+        { documentType: 'chequeUrl', url: 'https://cloudinary.com/cheque.jpg' },
+        makeRequester(),
+      );
+
+      await new Promise(resolve => setImmediate(resolve));
+      expect(mockVision.compareInvoiceToPO).not.toHaveBeenCalled();
+    });
+
+    it('updates qualification to QUALIFIED when OCR matches', async () => {
+      const itemsPayload = [{
+        productId: 'prod-id', quantityCartons: 12,
+        unitPriceKobo: 1700000, lineTotalKobo: 1700000,
+        product: { name: 'DarVinks Lotion' },
+      }];
+      mockPrisma.purchaseOrder.findUnique.mockResolvedValue(PO_STUB);
+      mockPrisma.purchaseOrder.update
+        .mockResolvedValueOnce({ ...PO_STUB, items: itemsPayload }) // document upload
+        .mockResolvedValue({});                                       // qualification update
+
+      await service.uploadDocument(
+        'po-id',
+        { documentType: 'kdInvoiceUrl', url: 'https://cloudinary.com/invoice.jpg' },
+        makeRequester(),
+      );
+      await new Promise(resolve => setImmediate(resolve));
+
+      // Second update call sets the qualification
+      const qualifyCall = mockPrisma.purchaseOrder.update.mock.calls.find(
+        (c) => c[0].data?.qualification !== undefined,
+      );
+      expect(qualifyCall?.[0].data.qualification).toBe('QUALIFIED');
+    });
+
+    it('sets NOT_QUALIFIED with mismatch details when OCR finds discrepancies', async () => {
+      mockVision.compareInvoiceToPO.mockResolvedValueOnce({
+        qualified:    false,
+        confidence:   0.90,
+        matchedLines: [],
+        mismatches:   [{ field: 'quantity', expected: 12, actual: 10, product: 'DarVinks Lotion' }],
+        summary:      'DarVinks Lotion (quantity)',
+      });
+
+      mockPrisma.purchaseOrder.findUnique.mockResolvedValue(PO_STUB);
+      mockPrisma.purchaseOrder.update.mockResolvedValue({
+        ...PO_STUB,
+        items: [{ productId: 'prod-id', quantityCartons: 12,
+                  unitPriceKobo: 1700000, lineTotalKobo: 1700000,
+                  product: { name: 'DarVinks Lotion' } }],
+      });
+
+      await service.uploadDocument(
+        'po-id',
+        { documentType: 'kdInvoiceUrl', url: 'https://cloudinary.com/invoice.jpg' },
+        makeRequester(),
+      );
+      await new Promise(resolve => setImmediate(resolve));
+
+      const qualifyCall = mockPrisma.purchaseOrder.update.mock.calls.find(
+        (c) => c[0].data?.qualification !== undefined,
+      );
+      expect(qualifyCall?.[0].data.qualification).toBe('NOT_QUALIFIED');
+      expect(qualifyCall?.[0].data.invoiceMismatch).toBeDefined();
     });
   });
 
