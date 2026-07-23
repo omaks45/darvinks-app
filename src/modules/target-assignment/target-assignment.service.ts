@@ -323,9 +323,17 @@ export class TargetAssignmentService {
   }
 
   /**
-   * Returns the individual target + achievement for the requesting user's
-   * own tier — feeds the "my performance" widget every dashboard shows,
-   * regardless of tier.
+   * Returns the target + achievement for a given user, for a given month —
+   * feeds the "my performance" widget every dashboard shows, regardless
+   * of tier.
+   *
+   * Takes a plain userId rather than a JwtPayload: the underlying queries
+   * only ever needed the user's ID, never their tier/region/team from the
+   * token. Accepting a bare ID also lets DashboardService compute a whole
+   * downstream team's rollup by calling this once per team member without
+   * fabricating a fake JwtPayload for each one — a JwtPayload represents
+   * "who is making this request," which is meaningless for "whose
+   * performance am I looking up on someone else's behalf."
    *
    * Achievement combines TWO sources, summed per category:
    *   1. Secondary Sales — sell-through the agent witnessed/made at a KD
@@ -335,10 +343,10 @@ export class TargetAssignmentService {
    *      PENDING_APPROVAL and weren't CANCELLED count — a submitted-but-
    *      not-yet-approved order isn't a real achievement yet.
    */
-  async getMyPerformance(requester: JwtPayload, year: number, month: number) {
+  async getMyPerformance(userId: string, year: number, month: number) {
     const targets = await this.prisma.targetAssignment.findMany({
       where: {
-        assignedToId: requester.sub,
+        assignedToId: userId,
         period:       'MONTHLY',
         year,
         month,
@@ -354,7 +362,7 @@ export class TargetAssignmentService {
       by: ['productId'],
       where: {
         secondarySale: {
-          userId:     requester.sub,
+          userId,
           deviceTime: { gte: startOfMonth, lt: endOfMonth },
         },
       },
@@ -366,7 +374,7 @@ export class TargetAssignmentService {
       by: ['productId'],
       where: {
         purchaseOrder: {
-          createdById: requester.sub,
+          createdById: userId,
           createdAt:   { gte: startOfMonth, lt: endOfMonth },
           status:      { notIn: ['PENDING_APPROVAL', 'CANCELLED'] },
         },

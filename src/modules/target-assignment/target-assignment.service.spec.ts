@@ -484,7 +484,7 @@ describe('TargetAssignmentService', () => {
         { productId: 'lotion-id', _sum: { quantityCartons: 200 } },
       ]);
 
-      const result = await service.getMyPerformance(makeRequester(), 2026, 6);
+      const result = await service.getMyPerformance('tier4-id', 2026, 6);
 
       expect(result).toHaveLength(1);
       expect(result[0].achievedCartons).toBe(500);
@@ -498,7 +498,7 @@ describe('TargetAssignmentService', () => {
       mockPrisma.secondarySaleItem.groupBy.mockResolvedValue([]);
       mockPrisma.purchaseOrderItem.groupBy.mockResolvedValue([]);
 
-      await service.getMyPerformance(makeRequester(), 2026, 6);
+      await service.getMyPerformance('tier4-id', 2026, 6);
 
       const poCall = mockPrisma.purchaseOrderItem.groupBy.mock.calls[0][0];
       expect(poCall.where.purchaseOrder.status.notIn).toEqual([
@@ -511,7 +511,7 @@ describe('TargetAssignmentService', () => {
       mockPrisma.purchaseOrderItem.groupBy.mockResolvedValue([]);
       mockPrisma.product.findMany.mockResolvedValue([]);
 
-      const result = await service.getMyPerformance(makeRequester(), 2026, 6);
+      const result = await service.getMyPerformance('tier4-id', 2026, 6);
       expect(result[0].achievedCartons).toBe(0);
       expect(result[0].percentAchieved).toBe(0);
     });
@@ -523,7 +523,7 @@ describe('TargetAssignmentService', () => {
       mockPrisma.secondarySaleItem.groupBy.mockResolvedValue([]);
       mockPrisma.purchaseOrderItem.groupBy.mockResolvedValue([]);
 
-      const result = await service.getMyPerformance(makeRequester(), 2026, 6);
+      const result = await service.getMyPerformance('tier4-id', 2026, 6);
       expect(result[0].isStale).toBe(true);
     });
 
@@ -531,7 +531,7 @@ describe('TargetAssignmentService', () => {
       mockPrisma.secondarySaleItem.groupBy.mockResolvedValue([]);
       mockPrisma.purchaseOrderItem.groupBy.mockResolvedValue([]);
 
-      await service.getMyPerformance(makeRequester(), 2026, 6);
+      await service.getMyPerformance('tier4-id', 2026, 6);
 
       const ssCall = mockPrisma.secondarySaleItem.groupBy.mock.calls[0][0];
       expect(ssCall.where.secondarySale.userId).toBe('tier4-id');
@@ -545,7 +545,7 @@ describe('TargetAssignmentService', () => {
       mockPrisma.secondarySaleItem.groupBy.mockResolvedValue([]);
       mockPrisma.purchaseOrderItem.groupBy.mockResolvedValue([]);
 
-      const result = await service.getMyPerformance(makeRequester(), 2026, 6);
+      const result = await service.getMyPerformance('tier4-id', 2026, 6);
       expect(result).toEqual([]);
     });
   });

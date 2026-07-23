@@ -12,6 +12,8 @@ datasource db {
   provider = "postgresql"
 }
 
+
+
 // ═════════════════════════════════════════════════════════════════════════════
 // ENUMS
 // ═════════════════════════════════════════════════════════════════════════════
@@ -177,6 +179,7 @@ enum TargetPeriod {
   WEEKLY
 }
 
+
 // ═════════════════════════════════════════════════════════════════════════════
 // PHASE 1 — AUTH, USERS, ATTENDANCE
 // ═════════════════════════════════════════════════════════════════════════════
@@ -220,6 +223,18 @@ model User {
   provisionedBy      User?              @relation("ProvisionedBy", fields: [provisionedById], references: [id])
   provisionedUsers   User[]             @relation("ProvisionedBy")
 
+  // Direct manager in the org hierarchy — distinct from provisionedById.
+  // provisionedById records who CREATED the account (an admin action);
+  // reportsToId records who this person actually reports to day-to-day,
+  // which is what target cascading, "my team" views, and approval routing
+  // all need. A Tier1 reports to a Tier2, a Tier2 to a Tier3, a Tier3 to a
+  // Tier4, a Tier4 to the Sales Head. Nullable because TIER5/TIER6/WAREHOUSE
+  // roles and the Sales Head themself have no one above them in this chain.
+  reportsToId        String?
+  reportsTo          User?              @relation("ReportsTo", fields: [reportsToId], references: [id])
+  directReports      User[]             @relation("ReportsTo")
+
+
   createdAt          DateTime           @default(now())
   updatedAt          DateTime           @updatedAt
   lastLogoutAt       DateTime?
@@ -243,6 +258,7 @@ model User {
   targetsAssigned            TargetAssignment[]    @relation("AssignedBy")
   targetsReceived            TargetAssignment[]    @relation("AssignedTo")
   invitesSent                InviteToken[]         @relation("InviteCreatedBy")
+  locationTargetsCreated     LocationTarget[]       @relation("LocationTargetCreatedBy")
 
   @@index([tier])
   @@index([role])
@@ -251,6 +267,7 @@ model User {
   @@index([email])
   @@index([isActive])
   @@index([accountOrigin])
+  @@index([reportsToId])
 }
 
 model RefreshToken {
@@ -338,6 +355,23 @@ model TargetAssignment {
   month         Int?
   week          Int?
   targetCartons Int
+
+  // ── Cascading distribution (Sales Head -> Tier4 -> Tier3 -> Tier2 -> Tier1) ──
+  // A row with parentAssignmentId = null is a root target set directly by the
+  // Sales Head for one of their Tier4 reports. Every row below that splits a
+  // parent's targetCartons among the assignee's own direct reports. The sum
+  // of all children sharing the same parentAssignmentId must exactly equal
+  // the parent's targetCartons — enforced in TargetAssignmentService, not
+  // here, since Prisma cannot express a cross-row SUM constraint.
+  parentAssignmentId String?
+  parentAssignment    TargetAssignment?  @relation("TargetCascade", fields: [parentAssignmentId], references: [id])
+  children            TargetAssignment[] @relation("TargetCascade")
+
+  // True when the PARENT of this row was edited after this row's children
+  // (if any) were already created. Flag only — values are left untouched,
+  // a human must review and re-split if the new parent total demands it.
+  isStale       Boolean         @default(false)
+
   note          String?
   createdAt     DateTime        @default(now())
   updatedAt     DateTime        @updatedAt
@@ -347,6 +381,7 @@ model TargetAssignment {
   @@index([assignedToId])
   @@index([category])
   @@index([year])
+  @@index([parentAssignmentId])
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -379,7 +414,7 @@ model Product {
 // ═════════════════════════════════════════════════════════════════════════════
 
 model Customer {
-  id              String   @id @default(uuid())
+  id              String    @id @default(uuid())
   businessName    String
   address         String
   mobilePhone     String
@@ -391,21 +426,25 @@ model Customer {
   contactPosition String?
   region          Region
   state           String
-  isActive        Boolean  @default(true)
-  balanceKobo     Int      @default(0)
+  locationId      String?   // nullable — backfilled gradually; not every legacy customer has one yet
+  location        Location? @relation(fields: [locationId], references: [id])
+  isActive        Boolean   @default(true)
+  balanceKobo     Int       @default(0)
   ownerId         String
-  owner           User     @relation("CustomerOwner", fields: [ownerId], references: [id])
-  createdAt       DateTime @default(now())
-  updatedAt       DateTime @updatedAt
+  owner           User      @relation("CustomerOwner", fields: [ownerId], references: [id])
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
   purchaseOrders      PurchaseOrder[]
   collections         Collection[]
   attendanceVisits    AttendanceEvent[]
   outOfRegionRequests OutOfRegionRequest[]
+  secondarySales      SecondarySale[]       @relation("SecondarySaleKdAccount")
 
   @@index([ownerId])
   @@index([region])
   @@index([balanceKobo])
+  @@index([locationId])
 }
 
 model OutOfRegionRequest {
@@ -578,6 +617,7 @@ model SecondarySale {
   userId      String
   user        User                @relation(fields: [userId], references: [id])
   kdAccountId String
+  kdAccount   Customer            @relation("SecondarySaleKdAccount", fields: [kdAccountId], references: [id])
   latitude    Float
   longitude   Float
   deviceTime  DateTime
@@ -603,6 +643,82 @@ model SecondarySaleItem {
 
   @@index([secondarySaleId])
   @@index([productId])
+}
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PHASE 3 — LOCATIONS & TARGETS
+// ═════════════════════════════════════════════════════════════════════════════
+//
+// A Location is a town/market within a state — finer-grained than Region.
+// e.g. Region SOUTH_WEST contains states {oyo, ogun, osun, ondo, ekiti},
+// and state "ondo" contains Locations {Arakale, Owo, Oore, Idanre}.
+//
+// Targets are set per Location, per category, per month — this is what lets
+// the weekly analytics deck show TGT / ACHV / BAL exactly like the area-head
+// report format already in use.
+
+model Location {
+  id        String   @id @default(uuid())
+  name      String   // e.g. "Arakale", "Osogbo"
+  state     String   // lowercase, normalised — same convention as Customer.state
+  region    Region
+  createdAt DateTime @default(now())
+
+  customers Customer[]
+  targets   LocationTarget[]
+
+  // A location name must be unique within its state — "Ondo" town in Ondo
+  // state vs a same-named hamlet elsewhere are still distinct rows by state.
+  @@unique([name, state])
+  @@index([region])
+  @@index([state])
+}
+
+// Covers product categories (CREAM, SOAP, LOTION) plus the three summary
+// rows the area-head report tracks that aren't products: MTN (a specific
+// SKU line in the sample deck, tracked like a category), SALES, and
+// COLLECTION (naira-value targets, not carton counts).
+//
+// NOTE ON NAMING: this is deliberately NOT called "Target" — that name is
+// taken by the pre-existing TargetAssignment model, which assigns a target
+// to an individual USER (e.g. "Kenny's June LOTION target is 600 cartons").
+// LocationTarget is a distinct, independent concept: a target set on a
+// distributor/market LOCATION (e.g. "Ore Ofe distributor's June target is
+// ₦60M"), matching the sample deck's per-distributor TGT/ACHV/BAL rows.
+// A user's individual target and their location's target are not the same
+// number and are not derived from each other — they are tracked separately
+// because the business tracks them separately.
+enum TargetCategory {
+  CREAM
+  SOAP
+  LOTION
+  MTN
+  SALES
+  COLLECTION
+}
+
+model LocationTarget {
+  id           String         @id @default(uuid())
+  locationId   String
+  location     Location       @relation(fields: [locationId], references: [id])
+  category     TargetCategory
+  // Format: "2026-06" — first-of-month convention, queried as a string prefix
+  // rather than a DateTime range; avoids timezone-boundary bugs entirely.
+  periodMonth  String
+  // Cartons for CREAM/SOAP/LOTION/MTN; kobo for SALES/COLLECTION.
+  // The unit is implied by `category` — same pattern as Product pricing,
+  // where the field name plus enum tells you what you're holding.
+  targetValue  Int
+  createdById  String
+  createdBy    User           @relation("LocationTargetCreatedBy", fields: [createdById], references: [id])
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+
+  // One target per location+category+month — re-setting a target is an
+  // update, not a new row, so achievement-vs-target stays unambiguous.
+  @@unique([locationId, category, periodMonth])
+  @@index([periodMonth])
+  @@index([locationId])
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -646,4 +762,16 @@ model Notification {
   @@index([userId, createdAt])
   @@index([status])
   @@index([channel])
+}
+
+model AnalyticsReport {
+  id          String   @id @default(uuid())
+  periodMonth String   @unique
+  pptUrl      String
+  xlsxUrl     String
+  generatedAt DateTime
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([periodMonth])
 }

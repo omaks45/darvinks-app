@@ -1,4 +1,4 @@
-// src/modules/customers/customer.service.ts
+
 import {
   BadRequestException,
   ConflictException,
@@ -299,6 +299,40 @@ export class CustomerService {
         approvedBy: true,
         updatedAt:  true,
       },
+    });
+  }
+
+  /**
+   * Returns the open approval queue for Out-of-Region requests — feeds the
+   * dashboard's "things awaiting your action" widget. Mirrors the exact
+   * same access rule as approveOutOfRegion() (ADMIN_TIERS + TIER4): anyone
+   * who CAN approve a request should also be able to SEE the queue of
+   * requests waiting on them, and nobody should see a queue they have no
+   * power to act on.
+   */
+  async findPendingOutOfRegionRequests(requester: JwtPayload) {
+    if (
+      !ADMIN_TIERS.includes(requester.tier as string) &&
+      requester.tier !== 'TIER4'
+    ) {
+      throw new ForbiddenException(
+        'Only Sales Head, ZSM, or System Admin can view the approval queue',
+      );
+    }
+
+    return this.prisma.outOfRegionRequest.findMany({
+      where:  { status: 'PENDING' },
+      select: {
+        id:          true,
+        customerId:  true,
+        customer:    { select: { businessName: true, region: true } },
+        requestedBy: true,
+        requester:   { select: { fullName: true, employeeRef: true } },
+        note:        true,
+        createdAt:   true,
+      },
+      orderBy: { createdAt: 'asc' }, // oldest pending first — first in, first reviewed
+      take:    100,
     });
   }
 

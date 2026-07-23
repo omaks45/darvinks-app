@@ -112,7 +112,7 @@ export class TargetAssignmentController {
     @Query('month', ParseIntPipe) month: number,
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.targetService.getMyPerformance(user, year, month);
+    return this.targetService.getMyPerformance(user.sub, year, month);
   }
 
   @Get(':id')

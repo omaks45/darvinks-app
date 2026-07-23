@@ -1,14 +1,10 @@
 
-// Reverse geocodes GPS coordinates to a human-readable address.
-// Used by AttendanceService on every clock-in, clock-out, and KD visit.
-
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import type { AppConfig } from '@common/config/app.config';
 
-interface GeocodeResult {
+export interface GeocodeResult {
   address:  string;
-  locality: string | null; // city / LGA
+  locality: string | null;
   state:    string | null;
 }
 
@@ -18,30 +14,53 @@ export class GoogleMapsService {
   private readonly apiKey: string;
   private readonly baseUrl = 'https://maps.googleapis.com/maps/api/geocode/json';
 
-  constructor(private readonly config: ConfigService<AppConfig>) {
-    this.apiKey = this.config.get<string>('googleMapsApiKey' as any) ?? '';
+  constructor(private readonly config: ConfigService) {
+    // Try config service first, fall back to process.env directly
+    this.apiKey =
+      this.config.get<string>('googleMapsApiKey') ??
+      process.env.GOOGLE_MAPS_API_KEY ??
+      '';
+
+    if (!this.apiKey) {
+      this.logger.warn(
+        'GOOGLE_MAPS_API_KEY is not set. ' +
+        'Attendance clock-in will save GPS coordinates instead of a readable address. ' +
+        'Add GOOGLE_MAPS_API_KEY to your .env file to enable reverse geocoding.',
+      );
+    } else {
+      this.logger.log('GoogleMapsService ready — reverse geocoding enabled');
+    }
   }
 
   /**
    * Converts lat/lng to a formatted address string.
-   * Returns a fallback string if the API is unavailable — never throws,
-   * so a Maps outage cannot block clock-in.
+   * NEVER throws — a Maps outage must not block clock-in.
+   * Falls back to "lat,lng" string when the API is unavailable or key is missing.
    */
   async reverseGeocode(
     latitude:  number,
     longitude: number,
   ): Promise<GeocodeResult> {
+    const fallback: GeocodeResult = {
+      address:  `${latitude},${longitude}`,
+      locality: null,
+      state:    null,
+    };
+
     if (!this.apiKey) {
-      this.logger.warn('GOOGLE_MAPS_API_KEY not set — skipping reverse geocode');
-      return { address: `${latitude},${longitude}`, locality: null, state: null };
+      return fallback;
     }
 
     try {
       const url = `${this.baseUrl}?latlng=${latitude},${longitude}&key=${this.apiKey}`;
-      const res  = await fetch(url);
+
+      this.logger.debug(`Geocoding (${latitude}, ${longitude})...`);
+
+      const res = await fetch(url);
 
       if (!res.ok) {
-        throw new Error(`Maps API HTTP ${res.status}`);
+        this.logger.warn(`Maps API returned HTTP ${res.status} — using coordinate fallback`);
+        return fallback;
       }
 
       const json = await res.json() as {
@@ -53,30 +72,48 @@ export class GoogleMapsService {
             types:      string[];
           }>;
         }>;
+        error_message?: string;
       };
 
-      if (json.status !== 'OK' || !json.results.length) {
-        this.logger.warn(`Geocode returned status: ${json.status}`);
-        return { address: `${latitude},${longitude}`, locality: null, state: null };
+      if (json.status !== 'OK') {
+        this.logger.warn(
+          `Geocode status: ${json.status}` +
+          (json.error_message ? ` — ${json.error_message}` : '') +
+          ' — using coordinate fallback',
+        );
+        return fallback;
+      }
+
+      if (!json.results.length) {
+        return fallback;
       }
 
       const best       = json.results[0];
       const components = best.address_components;
 
-      const locality = this.findComponent(components, 'locality')
-        ?? this.findComponent(components, 'administrative_area_level_2');
+      const locality =
+        this.findComponent(components, 'locality') ??
+        this.findComponent(components, 'administrative_area_level_2') ??
+        null;
 
-      const state = this.findComponent(components, 'administrative_area_level_1');
+      const state =
+        this.findComponent(components, 'administrative_area_level_1') ??
+        null;
 
-      return {
+      const result: GeocodeResult = {
         address:  best.formatted_address,
-        locality: locality ?? null,
-        state:    state    ?? null,
+        locality,
+        state,
       };
+
+      this.logger.debug(`Geocoded to: ${result.address}`);
+      return result;
+
     } catch (err) {
-      // Never block clock-in on a Maps failure
-      this.logger.error(`Reverse geocode failed for (${latitude}, ${longitude})`, err);
-      return { address: `${latitude},${longitude}`, locality: null, state: null };
+      this.logger.error(
+        `Reverse geocode failed for (${latitude}, ${longitude}): ${(err as Error).message}`,
+      );
+      return fallback;
     }
   }
 

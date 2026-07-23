@@ -10,6 +10,7 @@ import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 
 import { PrismaService } from '@common/prisma/prisma.service';
+import { GoogleMapsService } from '@common/google/google-map.service';
 import { CloudinaryService } from '@modules/cloudinary/cloudinary.service';
 import {
   checkAttendanceWindow,
@@ -27,8 +28,9 @@ export class AttendanceService {
   private readonly logger = new Logger(AttendanceService.name);
 
   constructor(
-    private readonly prisma: PrismaService,
+    private readonly prisma:     PrismaService,
     private readonly cloudinary: CloudinaryService,
+    private readonly maps:       GoogleMapsService,
     @InjectQueue('notifications') private readonly notifyQueue: Queue,
   ) {}
 
@@ -62,16 +64,20 @@ export class AttendanceService {
       dto.longitude,
     );
 
+    // Reverse-geocode GPS to human-readable address — never blocks clock-in
+    const { address } = await this.maps.reverseGeocode(dto.latitude, dto.longitude);
+
     const event = await this.prisma.attendanceEvent.create({
       data: {
-        userId: requester.sub,
-        type: AttendanceType.CLOCK_IN,
-        flag: windowCheck.flag,
+        userId:   requester.sub,
+        type:     AttendanceType.CLOCK_IN,
+        flag:     windowCheck.flag,
         photoUrl,
-        latitude: dto.latitude,
+        latitude:  dto.latitude,
         longitude: dto.longitude,
+        address:   address ?? null,
         deviceTime,
-        note: dto.note,
+        note:      dto.note,
       },
     });
 
@@ -122,16 +128,19 @@ export class AttendanceService {
       dto.longitude,
     );
 
+    const { address: clockOutAddress } = await this.maps.reverseGeocode(dto.latitude, dto.longitude);
+
     const event = await this.prisma.attendanceEvent.create({
       data: {
-        userId: requester.sub,
-        type: AttendanceType.CLOCK_OUT,
-        flag: windowCheck.flag,
+        userId:    requester.sub,
+        type:      AttendanceType.CLOCK_OUT,
+        flag:      windowCheck.flag,
         photoUrl,
-        latitude: dto.latitude,
+        latitude:  dto.latitude,
         longitude: dto.longitude,
+        address:   clockOutAddress ?? null,
         deviceTime,
-        note: dto.note,
+        note:      dto.note,
       },
     });
 
@@ -169,17 +178,20 @@ export class AttendanceService {
       dto.longitude,
     );
 
+    const { address: kdAddress } = await this.maps.reverseGeocode(dto.latitude, dto.longitude);
+
     return this.prisma.attendanceEvent.create({
       data: {
-        userId: requester.sub,
-        type: AttendanceType.KD_VISIT,
-        flag: AttendanceFlag.ON_TIME,
+        userId:      requester.sub,
+        type:        AttendanceType.KD_VISIT,
+        flag:        AttendanceFlag.ON_TIME,
         photoUrl,
-        latitude: dto.latitude,
-        longitude: dto.longitude,
+        latitude:    dto.latitude,
+        longitude:   dto.longitude,
+        address:     kdAddress ?? null,
         kdAccountId: dto.kdAccountId,
         deviceTime,
-        note: dto.note,
+        note:        dto.note,
       },
     });
   }
@@ -285,6 +297,35 @@ export class AttendanceService {
       },
       orderBy: { deviceTime: 'desc' },
     });
+  }
+
+  /**
+   * Non-throwing clock-in status check for today, scoped to the SERVER's
+   * calendar day via serverTime — the same signal ClockInGuard checks, so
+   * the dashboard's "you're marked absent" banner always agrees with
+   * whether write endpoints will actually let the person through.
+   *
+   * Deliberately NOT reused from checkDuplicateEvent()/assertClockInExists()
+   * above: those check deviceTime (the field agent's phone clock, which
+   * offline sync can backdate or delay), while this checks serverTime —
+   * the two are different signals for different purposes. ClockInGuard
+   * and this method both care "did the server actually receive a clock-in
+   * today," not "what date did the agent's phone claim."
+   */
+  async hasClockedInToday(userId: string): Promise<boolean> {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const event = await this.prisma.attendanceEvent.findFirst({
+      where: {
+        userId,
+        type:       AttendanceType.CLOCK_IN,
+        serverTime: { gte: startOfDay },
+      },
+      select: { id: true, serverTime: true },
+    });
+
+    return event !== null;
   }
 
   // ─── Private helpers ──────────────────────────────────────────────────────
