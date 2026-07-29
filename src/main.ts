@@ -26,6 +26,12 @@ async function bootstrap(): Promise<void> {
 
   app.setGlobalPrefix(prefix);
 
+  // ── Health check for Render monitoring ─────────────────────────────────────
+  // Registered before any guards or interceptors so Render can always reach it
+  app.use(`/${prefix}/health`, (_req: any, res: any) => {
+    res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
