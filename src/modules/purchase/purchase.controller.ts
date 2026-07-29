@@ -1,5 +1,6 @@
 // src/modules/purchase-orders/purchase-order.controller.ts
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -10,11 +11,15 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiConsumes,
   ApiOperation,
   ApiParam,
   ApiTags,
@@ -122,19 +127,47 @@ export class PurchaseOrderController {
 
   @Patch(':id/documents')
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
-  @ApiBody({ type: UploadDocumentDto })
+  @Patch(':id/documents')
+  @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    description: 'Document type (text field) + the document file',
+    schema: {
+      type: 'object',
+      required: ['documentType', 'file'],
+      properties: {
+        documentType: {
+          type: 'string',
+          enum: ['kdInvoiceUrl', 'chequeUrl', 'formalInvoiceUrl', 'deliveryOrderUrl'],
+          example: 'kdInvoiceUrl',
+        },
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'The invoice/document image (JPEG, PNG, PDF)',
+        },
+      },
+    },
+  })
   @ApiOperation({
-    summary: 'Upload a document URL to a purchase order',
+    summary: 'Upload a document file to a purchase order',
     description:
-      'Attach KD invoice, cheque image, formal invoice, or delivery order. ' +
+      'Accepts multipart/form-data with a documentType text field and a file. ' +
+      'Server uploads the file to Cloudinary and stores the resulting URL. ' +
+      'Uploading a KD invoice triggers OCR comparison against PO line items. ' +
       'Uploading a delivery order automatically transitions status to DO_UPLOADED.',
   })
+  @UseInterceptors(FileInterceptor('file'))
   uploadDocument(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UploadDocumentDto,
+    @UploadedFile() file: Express.Multer.File,
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.poService.uploadDocument(id, dto, user);
+    if (!file) {
+      throw new BadRequestException('A document file is required');
+    }
+    return this.poService.uploadDocument(id, dto, file, user);
   }
 
   @Patch(':id/qualify')

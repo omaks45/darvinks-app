@@ -1,4 +1,4 @@
-
+// src/modules/customers/customer.service.ts
 import {
   BadRequestException,
   ConflictException,
@@ -9,7 +9,8 @@ import {
 } from '@nestjs/common';
 import { Region } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
-import { resolveRegion } from '@common/utils/region.util';
+import { GoogleMapsService } from '@common/google/google-map.service';
+import { resolveRegion, resolveActualRegionForState } from '@common/utils/region.util';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type {
   CreateCustomerDto,
@@ -31,6 +32,8 @@ const CUSTOMER_SELECT = {
   contactPosition: true,
   region:          true,
   state:           true,
+  locationId:      true,
+  location:        { select: { name: true, state: true } },
   isActive:        true,
   balanceKobo:     true,
   ownerId:         true,
@@ -53,16 +56,92 @@ const ADMIN_TIERS = [
 export class CustomerService {
   private readonly logger = new Logger(CustomerService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly maps:   GoogleMapsService,
+  ) {}
 
   // ── Create ─────────────────────────────────────────────────────────────────
 
   async create(dto: CreateCustomerDto, requester: JwtPayload) {
-    const region = resolveRegion(dto.state, requester.team);
+    // ── Step 1: Resolve address and state ────────────────────────────────────
+    // Field tiers (1–4) must be physically present at the KD's location —
+    // they provide GPS coordinates from their device and the server geocodes
+    // them to a human-readable address. The mobile app handles GPS capture
+    // transparently; the agent never sees or types the lat/lng numbers.
+    //
+    // Admin tiers (Sales Head, System Admin, GM, Warehouse Admin) are working
+    // from an office and type the address manually — they are not expected
+    // to be physically present at the customer's location when registering.
 
-    // Check no duplicate phone for this customer
+    let resolvedAddress: string;
+    let resolvedState: string;
+
+    const isFieldTier = FIELD_TIERS.includes(requester.tier as string);
+
+    if (isFieldTier) {
+      if (dto.latitude === undefined || dto.longitude === undefined) {
+        throw new BadRequestException(
+          'Field staff must provide GPS coordinates (latitude and longitude) ' +
+          'to register a customer. You must be physically present at the ' +
+          'KD\'s location so the address can be confirmed by GPS.',
+        );
+      }
+
+      // Reverse-geocode the GPS position — never throws, falls back to
+      // coordinate string if Maps is unavailable (same principle as
+      // AttendanceService — never block a field operation due to Maps outage)
+      const geo = await this.maps.reverseGeocode(dto.latitude, dto.longitude);
+      resolvedAddress = geo.address;
+
+      // Use geocoded state if available; fall back to dto.state if the Maps
+      // API returned no state component (edge case: very rural coordinates)
+      if (geo.state) {
+        resolvedState = geo.state.toLowerCase().trim();
+      } else if (dto.state) {
+        resolvedState = dto.state.toLowerCase().trim();
+      } else {
+        throw new BadRequestException(
+          'Could not determine the state from your GPS location. ' +
+          'Please also provide the state field as a fallback.',
+        );
+      }
+
+      // ── GPS region validation ─────────────────────────────────────────────
+      // Validate that the GPS coordinates actually place the agent in their
+      // own region. We must use resolveActualRegionForState() here — NOT
+      // resolveRegion(state, agent.team) — because the latter would silently
+      // fall back to the agent's team default for any unrecognised state,
+      // making it possible for a NORTH_BRIGHT agent to register a Lagos KD
+      // (Lagos is SOUTH_WEST under RADIANT, but resolveRegion('lagos', BRIGHT)
+      // would return NORTH_BRIGHT, making the region check pass incorrectly).
+      const trueRegionForState = resolveActualRegionForState(resolvedState);
+      if (trueRegionForState && trueRegionForState !== requester.region) {
+        throw new ForbiddenException(
+          `Your GPS location is in ${resolvedState} (${trueRegionForState}), ` +
+          `but your account is assigned to ${requester.region}. ` +
+          `You must be physically present in your own region to register a customer. ` +
+          `If this KD is outside your region, submit an out-of-region request instead.`,
+        );
+      }
+    } else {
+      // Admin tiers — address and state are required text fields
+      if (!dto.address) {
+        throw new BadRequestException('address is required');
+      }
+      if (!dto.state) {
+        throw new BadRequestException('state is required');
+      }
+      resolvedAddress = dto.address;
+      resolvedState   = dto.state.toLowerCase().trim();
+    }
+
+    // ── Step 2: Derive region from state ─────────────────────────────────────
+    const region = resolveRegion(resolvedState, requester.team as any);
+
+    // ── Step 3: Duplicate phone check ────────────────────────────────────────
     const duplicate = await this.prisma.customer.findFirst({
-      where: { mobilePhone: dto.mobilePhone },
+      where:  { mobilePhone: dto.mobilePhone },
       select: { id: true },
     });
     if (duplicate) {
@@ -71,37 +150,58 @@ export class CustomerService {
       );
     }
 
-    // Field staff can only create customers in their own region
-    if (
-      FIELD_TIERS.includes(requester.tier as string) &&
-      region !== requester.region
-    ) {
-      throw new ForbiddenException(
-        'You can only register customers in your own region. ' +
-        'Submit an out-of-region request for customers outside your region.',
-      );
+    // ── Step 4: Region scope check ───────────────────────────────────────────
+    // GPS path (field tiers): region was already validated above via
+    // resolveActualRegionForState() — the GPS check is stricter and fires
+    // before we reach this point, so no duplicate check is needed here.
+    //
+    // Manual address path (admin tiers): admins can create customers in any
+    // region — they are not field-scoped. No check needed here either.
+    // This step is intentionally left as a no-op; kept for documentation clarity.
+
+    // ── Step 5: Validate locationId if provided ──────────────────────────────
+    // Location must exist AND be in the same state as the customer —
+    // an agent should not assign a Lagos customer to an Ondo location.
+    if (dto.locationId) {
+      const location = await this.prisma.location.findUnique({
+        where:  { id: dto.locationId },
+        select: { id: true, state: true, name: true },
+      });
+      if (!location) {
+        throw new NotFoundException(`Location ${dto.locationId} not found`);
+      }
+      if (location.state !== resolvedState) {
+        throw new BadRequestException(
+          `Location "${location.name}" is in ${location.state}, but this ` +
+          `customer's state is ${resolvedState}. ` +
+          `The location must be in the same state as the customer.`,
+        );
+      }
     }
 
+    // ── Step 6: Create ────────────────────────────────────────────────────────
     const customer = await this.prisma.customer.create({
       data: {
         businessName:    dto.businessName,
-        address:         dto.address,
+        address:         resolvedAddress,
         mobilePhone:     dto.mobilePhone,
-        whatsApp:        dto.whatsApp  ?? null,
-        email:           dto.email     ?? null,
-        cacNumber:       dto.cacNumber ?? null,
+        whatsApp:        dto.whatsApp       ?? null,
+        email:           dto.email          ?? null,
+        cacNumber:       dto.cacNumber      ?? null,
         contactPerson:   dto.contactPerson,
         contactPhone:    dto.contactPhone,
         contactPosition: dto.contactPosition ?? null,
         region,
-        state:           dto.state.toLowerCase().trim(),
+        state:           resolvedState,
+        locationId:      dto.locationId     ?? null,
         ownerId:         requester.sub,
       },
       select: CUSTOMER_SELECT,
     });
 
     this.logger.log(
-      `Customer created: ${customer.businessName} (${customer.region}) by ${requester.sub}`,
+      `Customer created: ${customer.businessName} (${customer.region}) by ${requester.sub}` +
+      (isFieldTier ? ` [GPS address]` : ` [manual address]`),
     );
     return customer;
   }

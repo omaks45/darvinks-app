@@ -1,86 +1,99 @@
-
-// One-time backfill: updates all User and Customer rows with region
-// LAGOS_1 or LAGOS_2 to SOUTH_WEST, reflecting the decision that Lagos
-// is now a single unified South West territory rather than two separate
-// regional codes.
+// prisma/backfill-lagos-region.ts
+//
+// One-time backfill: updates all User, Customer, Location and
+// CompetitorReport rows with region LAGOS_1 or LAGOS_2 to SOUTH_WEST.
 //
 // Run ONCE after deploying the region.util.ts change:
-//   npx ts-node -r tsconfig-paths/register prisma/migrations/backfill-lagos-region.ts
+//   npm run migrate:lagos
 //
 // Safe to re-run — rows already set to SOUTH_WEST are unaffected.
-// Do NOT run this before confirming the region.util.ts change is deployed,
-// as that would create a mismatch between existing logic and the new data.
 
-import * as fs from 'fs';
+import * as fs   from 'fs';
 import * as path from 'path';
-
-function loadDatabaseUrl(): string {
-  const envPath = path.join(process.cwd(), '.env');
-  const envContent = fs.readFileSync(envPath, 'utf8');
-  for (const line of envContent.split('\n')) {
-    const trimmed = line.trim();
-    if (trimmed.startsWith('DATABASE_URL=')) {
-      let value = trimmed.slice('DATABASE_URL='.length).trim();
-      if ((value.startsWith('"') && value.endsWith('"')) ||
-          (value.startsWith("'") && value.endsWith("'"))) {
-        value = value.slice(1, -1);
-      }
-      return value;
-    }
-  }
-  throw new Error('DATABASE_URL not found in .env');
-}
-
-const DATABASE_URL = loadDatabaseUrl();
-process.env.DATABASE_URL = DATABASE_URL;
-
 import { PrismaClient } from '@prisma/client';
+import { PrismaPg }     from '@prisma/adapter-pg';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const prisma = new (PrismaClient as any)({ datasourceUrl: DATABASE_URL });
+//  Load DATABASE_URL from .env
+function loadDatabaseUrl(): string {
+    const envPath = path.join(process.cwd(), '.env');
 
-const LEGACY_REGIONS = ['LAGOS_1', 'LAGOS_2'];
-const NEW_REGION = 'SOUTH_WEST';
+    let envContent: string;
+    try {
+        envContent = fs.readFileSync(envPath, 'utf8');
+    } catch {
+        throw new Error(`.env file not found at: ${envPath}`);
+    }
 
-async function main() {
-  console.log('Backfilling LAGOS_1/LAGOS_2 → SOUTH_WEST...\n');
+    for (const line of envContent.split('\n')) {
+        const trimmed = line.trim();
+        if (trimmed.startsWith('#') || !trimmed.includes('=')) continue;
 
-  // ── Users ─────────────────────────────────────────────────────────────────
-  const userResult = await prisma.user.updateMany({
-    where:  { region: { in: LEGACY_REGIONS } },
-    data:   { region: NEW_REGION },
-  });
-  console.log(`Users updated: ${userResult.count}`);
+        if (trimmed.startsWith('DATABASE_URL=')) {
+        let value = trimmed.slice('DATABASE_URL='.length).trim();
+        if (
+            (value.startsWith('"') && value.endsWith('"')) ||
+            (value.startsWith("'") && value.endsWith("'"))
+        ) {
+            value = value.slice(1, -1);
+        }
+        if (!value) throw new Error('DATABASE_URL is empty in .env file');
+        return value;
+        }
+    }
 
-  // ── Customers ─────────────────────────────────────────────────────────────
-  const customerResult = await prisma.customer.updateMany({
-    where:  { region: { in: LEGACY_REGIONS } },
-    data:   { region: NEW_REGION },
-  });
-  console.log(`Customers updated: ${customerResult.count}`);
+    throw new Error('DATABASE_URL not found in .env file');
+    }
 
-  // ── Locations ─────────────────────────────────────────────────────────────
-  const locationResult = await prisma.location.updateMany({
-    where:  { region: { in: LEGACY_REGIONS } },
-    data:   { region: NEW_REGION },
-  });
-  console.log(`Locations updated: ${locationResult.count}`);
+    const DATABASE_URL = loadDatabaseUrl();
+    process.env.DATABASE_URL = DATABASE_URL;
 
-  // ── Competitor Reports ────────────────────────────────────────────────────
-  const reportResult = await prisma.competitorReport.updateMany({
-    where:  { region: { in: LEGACY_REGIONS } },
-    data:   { region: NEW_REGION },
-  });
-  console.log(`Competitor reports updated: ${reportResult.count}`);
+    // Prisma client (matches seed.ts exactly)
+    const adapter = new PrismaPg({ connectionString: DATABASE_URL });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const prisma = new (PrismaClient as any)({ adapter });
 
-  console.log('\nBackfill complete. LAGOS_1 and LAGOS_2 are now deprecated.');
-  console.log('   No new rows will receive those values — region.util.ts maps');
-  console.log('   lagos → SOUTH_WEST going forward.\n');
+    // Backfill
+    const LEGACY_REGIONS = ['LAGOS_1', 'LAGOS_2'];
+    const NEW_REGION     = 'SOUTH_WEST';
+
+    async function main() {
+    console.log('Backfilling LAGOS_1/LAGOS_2 → SOUTH_WEST...\n');
+    console.log(`   Using DB: ${DATABASE_URL.substring(0, 40)}...`);
+
+    const userResult = await prisma.user.updateMany({
+        where: { region: { in: LEGACY_REGIONS } },
+        data:  { region: NEW_REGION },
+    });
+    console.log(`\nUsers updated:             ${userResult.count}`);
+
+    const customerResult = await prisma.customer.updateMany({
+        where: { region: { in: LEGACY_REGIONS } },
+        data:  { region: NEW_REGION },
+    });
+    console.log(`Customers updated:          ${customerResult.count}`);
+
+    const locationResult = await prisma.location.updateMany({
+        where: { region: { in: LEGACY_REGIONS } },
+        data:  { region: NEW_REGION },
+    });
+    console.log(`Locations updated:          ${locationResult.count}`);
+
+    const reportResult = await prisma.competitorReport.updateMany({
+        where: { region: { in: LEGACY_REGIONS } },
+        data:  { region: NEW_REGION },
+    });
+    console.log(`Competitor reports updated: ${reportResult.count}`);
+
+    console.log('\nBackfill complete.');
+    console.log('   LAGOS_1 and LAGOS_2 are now deprecated enum values.');
+    console.log('   region.util.ts maps lagos → SOUTH_WEST going forward.\n');
 }
 
 main()
-  .catch((err) => {
-    console.error('Backfill failed:', err);
-    process.exit(1);
-  })
-  .finally(() => prisma.$disconnect());
+    .catch((err: Error) => {
+        console.error('Backfill failed:', err.message ?? err);
+        process.exit(1);
+    })
+    .finally(async () => {
+        await prisma.$disconnect();
+    });

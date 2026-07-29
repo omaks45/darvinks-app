@@ -78,6 +78,25 @@ export function resolveRegion(state: string, team: Team): Region {
     return RADIANT_STATE_MAP[normalized] ?? Region.NORTH_CENTRAL;
 }
 
+/**
+ * Resolves the TRUE region for a given state regardless of team.
+ * Used when validating GPS coordinates against an agent's region —
+ * we must check what region the state actually belongs to, not what
+ * the agent's team would default to. This prevents a BRIGHT agent
+ * from registering a Lagos KD because resolveRegion('lagos', 'BRIGHT')
+ * would incorrectly fall back to NORTH_BRIGHT (the BRIGHT default)
+ * instead of SOUTH_WEST (where Lagos actually is).
+ */
+export function resolveActualRegionForState(state: string): Region | null {
+    const normalized = state.trim().toLowerCase();
+    // Check BRIGHT states first
+    if (BRIGHT_STATE_MAP[normalized]) return BRIGHT_STATE_MAP[normalized];
+    // Then RADIANT states
+    if (RADIANT_STATE_MAP[normalized]) return RADIANT_STATE_MAP[normalized];
+    // State not found in either map
+    return null;
+}
+
 export function generateEmployeeRef(sequence: number): string {
     return `Dar-${String(sequence).padStart(8, '0')}`;
 }

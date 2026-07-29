@@ -6,6 +6,7 @@ import { IdCardWorker } from './workers/id-card.worker';
 import { MailModule } from '@modules/email/email.module';
 import { CloudinaryModule } from '@modules/cloudinary/cloudinary.module';
 import { PrismaModule } from '@common/prisma/prisma.module';
+import { NotificationsService } from './notifications.service';
 
 @Module({
   imports: [
@@ -14,7 +15,7 @@ import { PrismaModule } from '@common/prisma/prisma.module';
     CloudinaryModule,
     MailModule,
   ],
-  providers: [NotificationsProcessor, IdCardWorker],
-  exports: [IdCardWorker],
+  providers: [NotificationsProcessor,  NotificationsService, IdCardWorker],
+  exports: [  NotificationsService, IdCardWorker],
 })
 export class NotificationsModule {}

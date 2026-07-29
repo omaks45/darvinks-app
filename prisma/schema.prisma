@@ -393,8 +393,8 @@ model Product {
   name            String
   category        ProductCategory
   packQty         Int
-  unitPriceKobo   Int
-  cartonPriceKobo Int
+  unitPriceKobo   BigInt
+  cartonPriceKobo BigInt
   isActive        Boolean         @default(true)
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
@@ -429,7 +429,7 @@ model Customer {
   locationId      String?   // nullable — backfilled gradually; not every legacy customer has one yet
   location        Location? @relation(fields: [locationId], references: [id])
   isActive        Boolean   @default(true)
-  balanceKobo     Int       @default(0)
+  balanceKobo     BigInt       @default(0)
   ownerId         String
   owner           User      @relation("CustomerOwner", fields: [ownerId], references: [id])
   createdAt       DateTime  @default(now())
@@ -517,12 +517,12 @@ model PurchaseOrder {
   warehouseLocation WarehouseLocation
   status            PurchaseOrderStatus  @default(PENDING_APPROVAL)
   qualification     InvoiceQualification @default(PENDING)
-  subtotalKobo      Int
-  creditAppliedKobo Int                  @default(0)
-  totalKobo         Int
-  paidKobo          Int                  @default(0)
-  cashDiscountKobo  Int                  @default(0)
-  incentiveKobo     Int                  @default(0)
+  subtotalKobo      BigInt
+  creditAppliedKobo BigInt @default(0)
+  totalKobo         BigInt
+  paidKobo          BigInt @default(0)
+  cashDiscountKobo  BigInt @default(0)
+  incentiveKobo     BigInt @default(0)
   kdInvoiceUrl      String?
   chequeUrl         String?
   formalInvoiceUrl  String?
@@ -562,8 +562,8 @@ model PurchaseOrderItem {
   productId       String
   product         Product       @relation(fields: [productId], references: [id])
   quantityCartons Int
-  unitPriceKobo   Int
-  lineTotalKobo   Int
+  unitPriceKobo   BigInt
+  lineTotalKobo   BigInt
 
   @@index([purchaseOrderId])
   @@index([productId])
@@ -573,7 +573,7 @@ model PaymentRecord {
   id              String        @id @default(uuid())
   purchaseOrderId String
   purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
-  amountKobo      Int
+  amountKobo      BigInt
   paymentMode     PaymentMode
   proofUrl        String?
   note            String?
@@ -594,7 +594,7 @@ model Collection {
   recordedById  String
   recordedBy    User        @relation(fields: [recordedById], references: [id])
   receiptUrl    String
-  amountKobo    Int
+  amountKobo    BigInt
   paymentMode   PaymentMode
   depositorName String
   location      String
@@ -620,6 +620,7 @@ model SecondarySale {
   kdAccount   Customer            @relation("SecondarySaleKdAccount", fields: [kdAccountId], references: [id])
   latitude    Float
   longitude   Float
+  address     String?
   deviceTime  DateTime
   serverTime  DateTime            @default(now())
   note        String?

@@ -3,10 +3,16 @@ import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import {
     IsEmail,
     IsEnum,
+    IsLatitude,
+    IsLongitude,
     IsNotEmpty,
+    IsNumber,
     IsOptional,
     IsString,
+    Matches,
+    ValidateIf,
 } from 'class-validator';
+import { Type } from 'class-transformer';
 import { Region } from '@prisma/client';
 
 export class CreateCustomerDto {
@@ -15,10 +21,42 @@ export class CreateCustomerDto {
     @IsNotEmpty()
     businessName: string;
 
-    @ApiProperty({ example: '12 Kolade Street, Ilupeju, Lagos' })
+    //Address — manual OR GPS
+    // Tier 2 must provide GPS coordinates (latitude + longitude) and the
+    // server resolves the address from them. All other tiers provide address
+    // and state directly as text. Both paths are optional individually but
+    // the service enforces: Tier 2 must have lat/lng, everyone else must
+    // have address + state. We cannot use @ValidateIf here because we don't
+    // have the requester's tier in the DTO — that validation lives in the
+    // service where the JwtPayload is available.
+
+    @ApiPropertyOptional({
+        example: '12 Kolade Street, Ilupeju, Lagos',
+        description: 'Required for Admin tiers only. Field staff (Tiers 1–4) must use latitude/longitude instead — the address is resolved from GPS.',
+    })
+    @IsOptional()
     @IsString()
-    @IsNotEmpty()
-    address: string;
+    address?: string;
+
+    @ApiPropertyOptional({
+        example: 6.5244,
+        description: 'Required for field staff (Tiers 1–4) — GPS latitude captured by the mobile device at the KD\'s location.',
+    })
+    @IsOptional()
+    @IsNumber()
+    @IsLatitude()
+    @Type(() => Number)
+    latitude?: number;
+
+    @ApiPropertyOptional({
+        example: 3.3792,
+        description: 'Required for field staff (Tiers 1–4) — GPS longitude captured by the mobile device at the KD\'s location.',
+    })
+    @IsOptional()
+    @IsNumber()
+    @IsLongitude()
+    @Type(() => Number)
+    longitude?: number;
 
     @ApiProperty({ example: '+2348012345678' })
     @IsString()
@@ -55,10 +93,23 @@ export class CreateCustomerDto {
     @IsString()
     contactPosition?: string;
 
-    @ApiProperty({ example: 'lagos' })
+    @ApiPropertyOptional({
+        example: 'lagos',
+        description: 'Required for Admin tiers. Field staff (Tiers 1–4) derive state from GPS — only needed as a fallback if GPS returns no state.',
+    })
+    @IsOptional()
     @IsString()
-    @IsNotEmpty()
-    state: string;
+    state?: string;
+
+    @ApiPropertyOptional({
+        example: 'uuid-of-location',
+        description:
+        'Optional — the market/town Location this KD operates in. ' +
+        'Must be a valid Location UUID in the same state as the customer.',
+    })
+    @IsOptional()
+    @IsString()
+    locationId?: string;
 }
 
 export class UpdateCustomerDto extends PartialType(CreateCustomerDto) {}

@@ -1,4 +1,4 @@
-// src/modules/notifications/workers/id-card.worker.ts
+
 import * as fs from 'fs';
 import * as path from 'path';
 import { Injectable, Logger } from '@nestjs/common';
@@ -134,8 +134,8 @@ export class IdCardWorker {
         pdfBuffer,
         'id-cards',
         {
-          publicId: `${data.employeeRef}.pdf`,
-          resourceType: 'raw',
+          publicId:     `${data.employeeRef}`,
+          resourceType: 'image',   // 'image' handles PDFs correctly — 'raw' serves as binary download causing blank page
         },
       );
       secure_url = result.secure_url;

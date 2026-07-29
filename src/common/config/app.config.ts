@@ -56,6 +56,7 @@ export interface AppConfig {
     redis: RedisConfig;
     cloudinary: CloudinaryConfig;
     googleMapsApiKey: string;
+    googleVisionCredentials: string | undefined;
     firebase: { serviceAccount: string };
     mail: MailConfig;
     bcryptRounds: number;
@@ -97,6 +98,8 @@ export default (): AppConfig => {
         },
 
         googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY!,
+
+        googleVisionCredentials: process.env.GOOGLE_APPLICATION_CREDENTIALS || undefined,
 
         firebase: {
         serviceAccount: process.env.FIREBASE_SERVICE_ACCOUNT!,

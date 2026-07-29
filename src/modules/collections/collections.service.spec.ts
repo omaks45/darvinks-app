@@ -30,7 +30,7 @@ const ACTIVE_CUSTOMER = {
   id:          'cust-id',
   isActive:    true,
   businessName: 'Ore Ofe Ltd',
-  balanceKobo: 5000000,
+  balanceKobo: BigInt(5000000),
 };
 
 const COLLECTION = {
@@ -39,7 +39,7 @@ const COLLECTION = {
   customer:      { businessName: 'Ore Ofe Ltd', region: 'LAGOS_1' },
   recordedById:  'user-id',
   recordedBy:    { fullName: 'Test Agent', employeeRef: 'Dar-00000001' },
-  amountKobo:    500000,
+  amountKobo:    BigInt(500000),
   paymentMode:   PaymentMode.TRANSFER,
   receiptUrl:    'https://cloudinary.com/receipt.jpg',
   depositorName: 'Emeka Obi',
@@ -253,14 +253,14 @@ describe('CollectionService', () => {
   describe('getSummaryForCustomer()', () => {
     it('returns summary with formatted naira values', async () => {
       mockPrisma.customer.findUnique.mockResolvedValue(ACTIVE_CUSTOMER);
-      mockPrisma.collection.aggregate.mockResolvedValue({ _sum: { amountKobo: 2000000 } });
+      mockPrisma.collection.aggregate.mockResolvedValue({ _sum: { amountKobo: BigInt(2000000) } });
       mockPrisma.collection.count.mockResolvedValue(4);
 
       const result = await service.getSummaryForCustomer('cust-id', makeAdmin());
 
       expect(result.customerId).toBe('cust-id');
       expect(result.collectionCount).toBe(4);
-      expect(result.totalCollectedKobo).toBe(2000000);
+      expect(result.totalCollectedKobo).toBe(BigInt(2000000));
       expect(result.balanceFormatted).toContain('50,000');
       expect(result.totalCollectedFormatted).toContain('20,000');
     });
@@ -271,12 +271,12 @@ describe('CollectionService', () => {
       mockPrisma.collection.count.mockResolvedValue(0);
 
       const result = await service.getSummaryForCustomer('cust-id', makeAdmin());
-      expect(result.totalCollectedKobo).toBe(0);
+      expect(result.totalCollectedKobo).toBe(BigInt(0));
     });
 
     it('runs aggregate and count in parallel', async () => {
       mockPrisma.customer.findUnique.mockResolvedValue(ACTIVE_CUSTOMER);
-      mockPrisma.collection.aggregate.mockResolvedValue({ _sum: { amountKobo: 0 } });
+      mockPrisma.collection.aggregate.mockResolvedValue({ _sum: { amountKobo: null } });
       mockPrisma.collection.count.mockResolvedValue(0);
 
       await service.getSummaryForCustomer('cust-id', makeAdmin());

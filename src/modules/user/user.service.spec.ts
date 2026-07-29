@@ -1,6 +1,6 @@
 // src/modules/users/users.service.spec.ts
 import { Test, TestingModule } from '@nestjs/testing';
-import { NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { UserTier, Team } from '@prisma/client';
 import { getQueueToken } from '@nestjs/bull';
 import { UsersService } from './user.service';
@@ -310,6 +310,97 @@ describe('UsersService', () => {
       const result = await service.updateProfile('user-id', { phone: '+2349012345678' });
 
       expect(result.phone).toBe('+2349012345678');
+    });
+  });
+
+  // ── addDirectReport ────────────────────────────────────────────────────────
+
+  describe('addDirectReport()', () => {
+    const SALES_HEAD = {
+      sub: 'sh-id', tier: 'TIER5_SALES_HEAD', team: 'RADIANT',
+      email: 'sh@darvinks.com',
+    } as any;
+
+    const TIER4_RADIANT = {
+      id: 'tier4-id', fullName: 'Kenny ZSM', tier: 'TIER4',
+      team: 'RADIANT', isActive: true, reportsToId: null,
+    };
+
+    const TIER4_BRIGHT = {
+      id: 'tier4-bright-id', fullName: 'Emeka ZSM', tier: 'TIER4',
+      team: 'BRIGHT', isActive: true, reportsToId: null,
+    };
+
+    beforeEach(() => {
+      mockPrisma.user.findUnique.mockResolvedValue(TIER4_RADIANT);
+      mockPrisma.user.update.mockResolvedValue({ ...TIER4_RADIANT, reportsToId: 'sh-id' });
+    });
+
+    it('links a same-team Tier 4 to a Sales Head', async () => {
+      const result = await service.addDirectReport('tier4-id', SALES_HEAD);
+      expect(mockPrisma.user.update).toHaveBeenCalledTimes(1);
+      const data = mockPrisma.user.update.mock.calls[0][0].data;
+      expect(data.reportsToId).toBe('sh-id');
+    });
+
+    it('throws BadRequestException when the target is on a different team', async () => {
+      // BRIGHT Tier 4 cannot report to RADIANT Sales Head
+      mockPrisma.user.findUnique.mockResolvedValue(TIER4_BRIGHT);
+      await expect(
+        service.addDirectReport('tier4-bright-id', SALES_HEAD),
+      ).rejects.toThrow(BadRequestException);
+      expect(mockPrisma.user.update).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when target tier does not match expected', async () => {
+      // Sales Head expects TIER4, not TIER3
+      mockPrisma.user.findUnique.mockResolvedValue({
+        ...TIER4_RADIANT, tier: 'TIER3',
+      });
+      await expect(
+        service.addDirectReport('tier4-id', SALES_HEAD),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when target is already linked to another manager', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({
+        ...TIER4_RADIANT, reportsToId: 'other-manager-id',
+      });
+      await expect(
+        service.addDirectReport('tier4-id', SALES_HEAD),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when target already reports to the requester', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({
+        ...TIER4_RADIANT, reportsToId: 'sh-id',
+      });
+      await expect(
+        service.addDirectReport('tier4-id', SALES_HEAD),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when target is deactivated', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({
+        ...TIER4_RADIANT, isActive: false,
+      });
+      await expect(
+        service.addDirectReport('tier4-id', SALES_HEAD),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws NotFoundException when target user does not exist', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      await expect(
+        service.addDirectReport('bad-id', SALES_HEAD),
+      ).rejects.toThrow(NotFoundException);
+    });
+
+    it('throws ForbiddenException when a TIER1 tries to add a direct report', async () => {
+      const tier1 = { ...SALES_HEAD, tier: 'TIER1' };
+      await expect(
+        service.addDirectReport('any-id', tier1),
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 });

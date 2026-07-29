@@ -1,4 +1,4 @@
-
+// src/modules/collections/collection.service.ts
 import {
   BadRequestException,
   ForbiddenException,
@@ -53,7 +53,7 @@ export class CollectionService {
         data: {
           customerId:    dto.customerId,
           recordedById:  requester.sub,
-          amountKobo:    dto.amountKobo,
+          amountKobo:    BigInt(dto.amountKobo),
           paymentMode:   dto.paymentMode,
           receiptUrl:    dto.receiptUrl,
           depositorName: dto.depositorName,
@@ -66,12 +66,12 @@ export class CollectionService {
       // Decrement customer outstanding balance
       this.prisma.customer.update({
         where: { id: dto.customerId },
-        data:  { balanceKobo: { decrement: dto.amountKobo } },
+        data:  { balanceKobo: { decrement: BigInt(dto.amountKobo) } },
       }),
     ]);
 
     this.logger.log(
-      `Collection recorded: ${ProductService.formatNaira(dto.amountKobo)} ` +
+      `Collection recorded: ${ProductService.formatNaira(Number(dto.amountKobo))} ` +
       `from customer ${dto.customerId} by ${requester.sub}`,
     );
     return collection;
@@ -136,10 +136,10 @@ export class CollectionService {
       customerId,
       businessName:      customer.businessName,
       balanceKobo:       customer.balanceKobo,
-      balanceFormatted:  ProductService.formatNaira(customer.balanceKobo),
-      totalCollectedKobo: totalResult._sum.amountKobo ?? 0,
+      balanceFormatted:  ProductService.formatNaira(Number(customer.balanceKobo)),
+      totalCollectedKobo: totalResult._sum.amountKobo ?? BigInt(0),
       totalCollectedFormatted: ProductService.formatNaira(
-        totalResult._sum.amountKobo ?? 0,
+        Number(totalResult._sum.amountKobo ?? BigInt(0)),
       ),
       collectionCount: countResult,
     };

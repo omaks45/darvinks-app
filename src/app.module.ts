@@ -8,7 +8,7 @@ import { BullModule } from '@nestjs/bull';
 
 import appConfig from '@common/config/app.config';
 import { validateEnv } from '@common/config/env.validation';
-import type { AppConfig } from '@common/config/app.config';
+//import type { AppConfig } from '@common/config/app.config';
 
 import { PrismaModule } from '@common/prisma/prisma.module';
 import { CloudinaryModule } from '@modules/cloudinary/cloudinary.module';
@@ -28,6 +28,9 @@ import { SecondarySaleModule } from '@modules/seconday-sales/seconday-sales.modu
 import { TargetAssignmentModule } from '@modules/target-assignment/target-assignment.module';
 import { CompetitorReportModule } from '@modules/competitor-report/competitor-report.module';
 import { DashboardModule } from '@modules/dashboard/dashboard.module';
+import { AnalyticsModule } from '@modules/analytics/analytics.module';
+import { LocationTargetModule } from '@modules/location-target/location-target.module';
+import { LocationModule } from '@modules/location/location.module';
 
 // Read REDIS_URL directly from process.env AFTER dotenv.config() has run
 const REDIS_URL = process.env.REDIS_URL;
@@ -91,6 +94,9 @@ function parsedRedisUrl() {
     TargetAssignmentModule,
     CompetitorReportModule,
     DashboardModule,
+    LocationModule,
+    LocationTargetModule,
+    AnalyticsModule,
   ],
 })
 export class AppModule {}

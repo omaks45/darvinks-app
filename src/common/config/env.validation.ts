@@ -107,6 +107,12 @@ class EnvironmentVariables {
     @IsNotEmpty()
     GOOGLE_MAPS_API_KEY!: string;
 
+    // ── Google Vision ──────────────────────────────────────────────────────────
+
+    @IsString()
+    @IsOptional()
+    GOOGLE_APPLICATION_CREDENTIALS?: string;
+
     // ── Firebase ───────────────────────────────────────────────────────────────
 
     @IsString()

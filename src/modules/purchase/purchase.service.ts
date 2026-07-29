@@ -1,4 +1,4 @@
-// src/modules/purchase-orders/purchase-order.service.ts
+
 import {
   BadRequestException,
   ForbiddenException,
@@ -10,6 +10,7 @@ import { PurchaseOrderStatus, WarehouseLocation } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { ProductService } from '@modules/products/products.service';
 import { GoogleVisionService } from '@common/google/google-vision.service';
+import { CloudinaryService, CloudinaryFolder } from '@modules/cloudinary/cloudinary.service';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type {
   CreatePurchaseOrderDto,
@@ -97,6 +98,7 @@ export class PurchaseOrderService {
     private readonly prisma:          PrismaService,
     private readonly productService:  ProductService,
     private readonly vision:          GoogleVisionService,
+    private readonly cloudinary:      CloudinaryService,
   ) {}
 
   // ── Create ─────────────────────────────────────────────────────────────────
@@ -131,10 +133,13 @@ export class PurchaseOrderService {
     // Build line items and calculate totals
     const itemsData = dto.items.map((item) => {
       const product      = productMap.get(item.productId)!;
-      const unitPrice    = ProductService.effectivePrice(product, item.quantityCartons);
-      const lineTotal    = item.quantityCartons >= product.packQty
-        ? product.cartonPriceKobo
-        : product.unitPriceKobo * item.quantityCartons;
+      // PO items are always ordered in cartons — carton price always applies.
+      // unitPriceKobo is stored for reference (price per individual unit inside
+      // a carton) but lineTotalKobo is always cartonPriceKobo × quantityCartons.
+      // The packQty field describes how many units are inside one carton — it is
+      // not a threshold for switching between pricing tiers in purchase orders.
+      const unitPrice    = product.cartonPriceKobo;
+      const lineTotal    = product.cartonPriceKobo * BigInt(item.quantityCartons);
 
       return {
         productId:       item.productId,
@@ -144,8 +149,10 @@ export class PurchaseOrderService {
       };
     });
 
-    const subtotalKobo      = itemsData.reduce((sum, i) => sum + i.lineTotalKobo, 0);
-    const creditAppliedKobo = Math.min(dto.creditAppliedKobo ?? 0, subtotalKobo);
+    const subtotalKobo      = itemsData.reduce((sum, i) => sum + i.lineTotalKobo, BigInt(0));
+    const creditAppliedKobo = dto.creditAppliedKobo
+      ? (BigInt(dto.creditAppliedKobo) < subtotalKobo ? BigInt(dto.creditAppliedKobo) : subtotalKobo)
+      : BigInt(0);
     const totalKobo         = subtotalKobo - creditAppliedKobo;
 
     // Generate unique order reference
@@ -167,7 +174,7 @@ export class PurchaseOrderService {
       select: PO_DETAIL_SELECT,
     });
 
-    this.logger.log(`PO created: ${orderRef} (₦${totalKobo / 100}) by ${requester.sub}`);
+    this.logger.log(`PO created: ${orderRef} (₦${totalKobo / 100n}) by ${requester.sub}`);
     return po;
   }
 
@@ -308,11 +315,11 @@ export class PurchaseOrderService {
       );
     }
 
-    const newPaidKobo = po.paidKobo + dto.amountKobo;
+    const newPaidKobo = po.paidKobo + BigInt(dto.amountKobo);
     if (newPaidKobo > po.totalKobo) {
       throw new BadRequestException(
-        `Payment of ${ProductService.formatNaira(dto.amountKobo)} would exceed ` +
-        `the outstanding balance of ${ProductService.formatNaira(po.totalKobo - po.paidKobo)}`,
+        `Payment of ${ProductService.formatNaira(Number(dto.amountKobo))} would exceed ` +
+        `the outstanding balance of ${ProductService.formatNaira(Number(po.totalKobo - po.paidKobo))}`,
       );
     }
 
@@ -322,7 +329,7 @@ export class PurchaseOrderService {
       this.prisma.paymentRecord.create({
         data: {
           purchaseOrderId: id,
-          amountKobo:      dto.amountKobo,
+          amountKobo:      BigInt(dto.amountKobo),
           paymentMode:     dto.paymentMode,
           proofUrl:        dto.proofUrl ?? null,
           note:            dto.note     ?? null,
@@ -336,33 +343,62 @@ export class PurchaseOrderService {
           status:     po.status === 'APPROVED' ? 'PAYMENT_RECEIVED' : po.status,
           ...(isFullyPaid ? { status: 'FULLY_PAID', fullyPaidAt: new Date() } : {}),
           // Update customer balance (debit — positive means they owe money)
-          customer:   { update: { balanceKobo: { decrement: dto.amountKobo } } },
+          customer:   { update: { balanceKobo: { decrement: BigInt(dto.amountKobo) } } },
         },
       }),
     ]);
 
     this.logger.log(
-      `Payment recorded: ${ProductService.formatNaira(dto.amountKobo)} on PO ${po.orderRef}` +
+      `Payment recorded: ${ProductService.formatNaira(Number(dto.amountKobo))} on PO ${po.orderRef}` +
       `${isFullyPaid ? ' — FULLY PAID' : ''}`,
     );
     return payment;
   }
 
   // ── Document upload ────────────────────────────────────────────────────────
+  // Maps each document type to its Cloudinary folder
+  private readonly DOCUMENT_FOLDER_MAP: Record<
+    'kdInvoiceUrl' | 'chequeUrl' | 'formalInvoiceUrl' | 'deliveryOrderUrl',
+    { folder: CloudinaryFolder; label: string }
+  > = {
+    kdInvoiceUrl:     { folder: 'invoices', label: 'KD invoice' },
+    chequeUrl:        { folder: 'cheques',  label: 'cheque image' },
+    formalInvoiceUrl: { folder: 'invoices', label: 'formal invoice' },
+    deliveryOrderUrl: { folder: 'invoices', label: 'delivery order' },
+  };
 
-  async uploadDocument(id: string, dto: UploadDocumentDto, requester: JwtPayload) {
+  async uploadDocument(
+    id:        string,
+    dto:       UploadDocumentDto,
+    file:      Express.Multer.File,
+    requester: JwtPayload,
+  ) {
     await this.assertExists(id);
 
-    // Update status to DO_UPLOADED when delivery order is uploaded
+    // 1. Upload the file to Cloudinary
+    const { folder, label } = this.DOCUMENT_FOLDER_MAP[dto.documentType];
+    const uploadResult = await this.cloudinary.uploadBuffer(
+      file.buffer,
+      folder,
+      {
+        publicId:     `${id}-${dto.documentType}-${Date.now()}`,
+        resourceType: file.mimetype === 'application/pdf' ? 'raw' : 'image',
+      },
+    );
+    const fileUrl = uploadResult.secure_url;
+    this.logger.log(`${label} uploaded for PO ${id}: ${fileUrl}`);
+
+    // 2. Store the URL and update status if needed
     const statusUpdate = dto.documentType === 'deliveryOrderUrl'
       ? { status: 'DO_UPLOADED' as PurchaseOrderStatus }
       : {};
 
     const updated = await this.prisma.purchaseOrder.update({
       where:  { id },
-      data:   { [dto.documentType]: dto.url, ...statusUpdate },
+      data:   { [dto.documentType]: fileUrl, ...statusUpdate },
       select: {
         ...PO_LIST_SELECT,
+        kdInvoiceUrl: true,
         items: {
           select: {
             productId:       true,
@@ -375,9 +411,9 @@ export class PurchaseOrderService {
       },
     });
 
-    // Auto-run OCR comparison when the KD invoice is uploaded
+    // 3. Auto-run OCR when KD invoice is uploaded (fire-and-forget)
     if (dto.documentType === 'kdInvoiceUrl') {
-      void this.runInvoiceComparison(id, dto.url, updated.items);
+      void this.runInvoiceComparison(id, fileUrl, updated.items);
     }
 
     return updated;
@@ -394,8 +430,8 @@ export class PurchaseOrderService {
     items:        Array<{
       productId:       string;
       quantityCartons: number;
-      unitPriceKobo:   number;
-      lineTotalKobo:   number;
+      unitPriceKobo:   bigint;
+      lineTotalKobo:   bigint;
       product:         { name: string };
     }>,
   ): Promise<void> {
@@ -405,8 +441,8 @@ export class PurchaseOrderService {
       const poItems = items.map((i) => ({
         productName:     i.product.name,
         quantityCartons: i.quantityCartons,
-        unitPriceKobo:   i.unitPriceKobo,
-        lineTotalKobo:   i.lineTotalKobo,
+        unitPriceKobo:   Number(i.unitPriceKobo),
+        lineTotalKobo:   Number(i.lineTotalKobo),
       }));
 
       const result = await this.vision.compareInvoiceToPO(invoiceUrl, poItems);

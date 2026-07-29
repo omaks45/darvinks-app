@@ -1,0 +1,24 @@
+-- AlterTable
+ALTER TABLE "Collection" ALTER COLUMN "amountKobo" SET DATA TYPE BIGINT;
+
+-- AlterTable
+ALTER TABLE "Customer" ALTER COLUMN "balanceKobo" SET DATA TYPE BIGINT;
+
+-- AlterTable
+ALTER TABLE "PaymentRecord" ALTER COLUMN "amountKobo" SET DATA TYPE BIGINT;
+
+-- AlterTable
+ALTER TABLE "Product" ALTER COLUMN "unitPriceKobo" SET DATA TYPE BIGINT,
+ALTER COLUMN "cartonPriceKobo" SET DATA TYPE BIGINT;
+
+-- AlterTable
+ALTER TABLE "PurchaseOrder" ALTER COLUMN "subtotalKobo" SET DATA TYPE BIGINT,
+ALTER COLUMN "creditAppliedKobo" SET DATA TYPE BIGINT,
+ALTER COLUMN "totalKobo" SET DATA TYPE BIGINT,
+ALTER COLUMN "paidKobo" SET DATA TYPE BIGINT,
+ALTER COLUMN "cashDiscountKobo" SET DATA TYPE BIGINT,
+ALTER COLUMN "incentiveKobo" SET DATA TYPE BIGINT;
+
+-- AlterTable
+ALTER TABLE "PurchaseOrderItem" ALTER COLUMN "unitPriceKobo" SET DATA TYPE BIGINT,
+ALTER COLUMN "lineTotalKobo" SET DATA TYPE BIGINT;

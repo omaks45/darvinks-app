@@ -14,7 +14,7 @@ import { PrismaService } from '@common/prisma/prisma.service';
 import { MailService } from '@modules/email/email.service';
 import { CloudinaryService } from '@modules/cloudinary/cloudinary.service';
 import { TokenService } from '@modules/tokens/tokens.service';
-import { resolveRegion, generateEmployeeRef } from '@common/utils/region.util';
+import { resolveRegion } from '@common/utils/region.util';
 import { tierFromRole, labelFromRole } from '@common/utils/role.utils';
 import type { AppConfig } from '@common/config/app.config';
 import type { RegisterDto } from './dto/register.dto';
@@ -64,8 +64,7 @@ export class AuthService {
     const region = resolveRegion(dto.state, dto.team);
 
     // 5. Generate employee ref — Dar-{8-digit sequence}
-    const userCount = await this.prisma.user.count();
-    const employeeRef = generateEmployeeRef(userCount + 1);
+    const employeeRef = await this.nextEmployeeRef();
 
     // 6. Upload profile picture if provided
     let profilePictureUrl: string | undefined;
@@ -380,9 +379,7 @@ export class AuthService {
     const roleLabel = labelFromRole(invite.role as any);
 
     // 6. Generate employee ref
-    const userCount   = await this.prisma.user.count();
-    const seq         = String(userCount + 1).padStart(8, '0');
-    const employeeRef = `Dar-${seq}`;
+    const employeeRef = await this.nextEmployeeRef();
 
     // 7. Create user
     const user = await this.prisma.user.create({
@@ -426,6 +423,31 @@ export class AuthService {
       employeeRef: user.employeeRef,
       message:     'Registration successful. Your digital ID card will be ready shortly.',
     };
+  }
+
+  // ─── Private helpers ────────────────────────────────────────────────────────
+
+  /**
+   * Generates the next unique employee reference by finding the highest
+   * existing sequence number and incrementing it. Using COUNT() is wrong
+   * because it collides when any user already exists at that sequence position.
+   */
+  private async nextEmployeeRef(): Promise<string> {
+    const latest = await this.prisma.user.findFirst({
+      orderBy: { employeeRef: 'desc' },
+      select:  { employeeRef: true },
+    });
+
+    if (!latest) {
+      return 'Dar-00000001';
+    }
+
+    // employeeRef format: "Dar-XXXXXXXX" — extract the numeric part
+    const match = latest.employeeRef.match(/Dar-(\d+)/);
+    if (!match) return 'Dar-00000001';
+
+    const next = parseInt(match[1], 10) + 1;
+    return `Dar-${String(next).padStart(8, '0')}`;
   }
 
 }

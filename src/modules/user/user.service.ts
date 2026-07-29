@@ -1,4 +1,4 @@
-// src/modules/user/user.service.ts
+
 import {
   BadRequestException,
   ForbiddenException,
@@ -224,6 +224,7 @@ export class UsersService {
         id: true,
         fullName: true,
         tier: true,
+        team: true,
         isActive: true,
         reportsToId: true,
       },
@@ -237,6 +238,17 @@ export class UsersService {
         `Expected a ${expectedTier} user but ${target.fullName} is ${target.tier}`,
       );
     }
+
+    // Team must match — a RADIANT Sales Head cannot manage a BRIGHT agent
+    // and vice versa. Each team operates as an independent org unit.
+    if (target.team !== requester.team) {
+      throw new BadRequestException(
+        `Team mismatch: you are on team ${requester.team} but ` +
+        `${target.fullName} is on team ${target.team}. ` +
+        `A manager can only link agents within their own team.`,
+      );
+    }
+
     if (target.reportsToId && target.reportsToId !== requester.sub) {
       throw new BadRequestException(
         `${target.fullName} already reports to someone else. ` +

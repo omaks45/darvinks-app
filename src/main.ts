@@ -9,6 +9,11 @@ import { GlobalExceptionFilter } from '@common/filters/http-exception.filter';
 import { TransformInterceptor } from '@common/interceptors/transform.interceptor';
 import type { AppConfig } from '@common/config/app.config';
 
+// BigInt serialization — Prisma returns BigInt for monetary fields (kobo values).
+// JSON.stringify cannot handle BigInt natively; this converts them to Number.
+// Safe because all kobo amounts fit within Number.MAX_SAFE_INTEGER (≈₦90 trillion).
+(BigInt.prototype as any).toJSON = function () { return Number(this); };
+
 async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, {
     logger: ['log', 'warn', 'error', 'debug'],

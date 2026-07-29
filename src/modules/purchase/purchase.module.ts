@@ -4,9 +4,10 @@ import { PurchaseOrderController } from './purchase.controller';
 import { PurchaseOrderService } from './purchase.service';
 import { ProductModule } from '@modules/products/products.module';
 import { GoogleModule } from '@common/google/google.module';
+import { CloudinaryModule } from '@modules/cloudinary/cloudinary.module';
 
 @Module({
-  imports:     [ProductModule, GoogleModule],
+  imports:     [ProductModule, GoogleModule,  CloudinaryModule],
   controllers: [PurchaseOrderController],
   providers:   [PurchaseOrderService],
   exports:     [PurchaseOrderService],

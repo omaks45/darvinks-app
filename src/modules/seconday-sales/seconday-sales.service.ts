@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '@common/prisma/prisma.service';
+import { GoogleMapsService } from '@common/google/google-map.service';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type {
   CreateSecondarySaleDto,
@@ -26,6 +27,7 @@ const SALE_SELECT = {
   kdAccount:  { select: { businessName: true, region: true } },
   latitude:   true,
   longitude:  true,
+  address:    true,
   deviceTime: true,
   serverTime: true,
   note:       true,
@@ -47,7 +49,10 @@ const SALE_SELECT = {
 export class SecondarySaleService {
   private readonly logger = new Logger(SecondarySaleService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly maps:   GoogleMapsService,
+  ) {}
 
   // ── Create ─────────────────────────────────────────────────────────────────
 
@@ -90,12 +95,24 @@ export class SecondarySaleService {
       throw new BadRequestException(`Products not found: ${missing.join(', ')}`);
     }
 
+    // Resolve GPS coordinates to a human-readable address via Google Maps.
+    // Falls back to coordinate string if geocoding fails — never block a sale.
+    let resolvedAddress: string | null = null;
+    try {
+      const geo = await this.maps.reverseGeocode(dto.latitude, dto.longitude);
+      resolvedAddress = geo?.address ?? `${dto.latitude}, ${dto.longitude}`;
+    } catch {
+      resolvedAddress = `${dto.latitude}, ${dto.longitude}`;
+      this.logger.warn(`Geocoding failed for secondary sale — storing raw coordinates`);
+    }
+
     const sale = await this.prisma.secondarySale.create({
       data: {
         userId:      requester.sub,
         kdAccountId: dto.kdAccountId,
         latitude:    dto.latitude,
         longitude:   dto.longitude,
+        address:     resolvedAddress,
         deviceTime:  new Date(dto.deviceTime),
         note:        dto.note ?? null,
         items: {

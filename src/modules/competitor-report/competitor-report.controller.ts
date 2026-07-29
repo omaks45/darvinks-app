@@ -1,5 +1,6 @@
 
 import {
+  BadRequestException,
   Body,
   Controller,
   Get,
@@ -9,11 +10,15 @@ import {
   ParseUUIDPipe,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
   ApiBody,
+  ApiConsumes,
   ApiOperation,
   ApiParam,
   ApiTags,
@@ -37,19 +42,47 @@ export class CompetitorReportController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  @UseGuards(ClockInGuard) // same absence rule as Secondary Sales
-  @ApiOperation({
-    summary: 'Submit a competitor report (Tier 1-4 only, requires clock-in today)',
+  @UseGuards(ClockInGuard)
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
     description:
-      'Fire-and-forget — no approval workflow. Sales Head/Admin view these ' +
-      'as a feed via GET /competitor-reports.',
+      'For TEXT reports: send as JSON (Content-Type: application/json). ' +
+      'For IMAGE/VIDEO/PDF reports: send as multipart/form-data with a "file" field.',
+    schema: {
+      type: 'object',
+      required: ['mediaType'],
+      properties: {
+        mediaType:   { type: 'string', enum: ['TEXT', 'IMAGE', 'VIDEO', 'PDF'] },
+        textContent: { type: 'string', description: 'Required when mediaType is TEXT' },
+        tags:        { type: 'array', items: { type: 'string' } },
+        note:        { type: 'string' },
+        file: {
+          type: 'string',
+          format: 'binary',
+          description: 'Required when mediaType is IMAGE, VIDEO, or PDF',
+        },
+      },
+    },
   })
-  @ApiBody({ type: CreateCompetitorReportDto })
+  @ApiOperation({
+    summary: 'Submit a competitor report (Tier 1-4, clock-in required)',
+    description:
+      'TEXT reports: send as JSON with textContent field. ' +
+      'IMAGE/VIDEO/PDF reports: send as multipart/form-data with a file attached. ' +
+      'Server uploads the file to Cloudinary automatically.',
+  })
+  @UseInterceptors(FileInterceptor('file'))
   create(
     @Body() dto: CreateCompetitorReportDto,
+    @UploadedFile() file: Express.Multer.File | undefined,
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.competitorReportService.create(dto, user);
+    if (dto.mediaType !== 'TEXT' && !file) {
+      throw new BadRequestException(
+        `A file is required when mediaType is ${dto.mediaType}`,
+      );
+    }
+    return this.competitorReportService.create(dto, file, user);
   }
 
   @Get()

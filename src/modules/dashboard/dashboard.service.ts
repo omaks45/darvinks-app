@@ -178,9 +178,14 @@ export class DashboardService {
           pendingPOApprovals.length + pendingOutOfRegionRequests.length,
       },
       myTeam: {
-        directReportCount: myDirectReports.length, // Tier4 zonal managers
-        directReports:      myDirectReports,
-        rollup:              teamRollup,
+        // directReports = immediate Tier4 ZSMs (who the Sales Head assigns targets to)
+        directReportCount: myDirectReports.length,
+        directReports:     myDirectReports,
+        // allMembers = everyone in the entire downstream tree (Tier4 + Tier3 + Tier2 + Tier1)
+        // grouped so the frontend can render the org chart
+        allMemberCount: teamRollup.allMembers.length,
+        allMembers:     teamRollup.allMembers,
+        rollup:         teamRollup,
       },
       targetsAssignedThisYear: orgWideTargets.length,
       competitorActivityFeed: recentCompetitorFeed.slice(0, 15),
@@ -200,6 +205,7 @@ export class DashboardService {
       lowStock,
       recentCompetitorFeed,
       targetsThisYear,
+      allUsers,
     ] = await Promise.all([
       this.prisma.user.count({ where: { isActive: true } }),
       this.prisma.customer.count({ where: { isActive: true } }),
@@ -215,6 +221,29 @@ export class DashboardService {
         },
       }),
       this.prisma.targetAssignment.count({ where: { year } }),
+      // All users — so Admin can take action (deactivate, view, reset password)
+      // directly from the dashboard without a separate GET /admin/users call
+      this.prisma.user.findMany({
+        orderBy: [{ tier: 'asc' }, { fullName: 'asc' }],
+        select: {
+          id:                true,
+          employeeRef:       true,
+          fullName:          true,
+          email:             true,
+          phone:             true,
+          tier:              true,
+          team:              true,
+          region:            true,
+          state:             true,
+          role:              true,
+          roleLabel:         true,
+          isActive:          true,
+          profilePictureUrl: true,
+          idCardUrl:         true,
+          createdAt:         true,
+          reportsToId:       true,
+        },
+      }),
     ]);
 
     return {
@@ -233,6 +262,9 @@ export class DashboardService {
         lowStockEntries:    lowStock.slice(0, 20),
       },
       competitorActivityFeed: recentCompetitorFeed,
+      // Full user list — Admin can deactivate/reactivate/view any user from here
+      // Sorted by tier then name. Use id with PATCH /admin/users/:id/deactivate etc.
+      users: allUsers,
     };
   }
 
@@ -274,6 +306,12 @@ export class DashboardService {
    */
   private async getTeamRollup(requester: JwtPayload, year: number, month: number) {
     const allDownstreamUserIds: string[] = [];
+    const allDownstreamUsers: Array<{
+      id: string; tier: string; employeeRef: string; fullName: string;
+      email: string; phone: string; team: string | null; region: string | null;
+      state: string | null; profilePictureUrl: string | null;
+      idCardUrl: string | null; isActive: boolean; reportsToId: string | null;
+    }> = [];
     let currentLevelIds = [requester.sub];
 
     const cascadeIdx = CASCADE_ORDER.indexOf(requester.tier as UserTier);
@@ -289,16 +327,31 @@ export class DashboardService {
     for (let i = 0; i < CASCADE_ORDER.length; i++) {
       const nextLevel = await this.prisma.user.findMany({
         where:  { reportsToId: { in: currentLevelIds } },
-        select: { id: true, tier: true },
+        select: {
+          id:                true,
+          tier:              true,
+          employeeRef:       true,
+          fullName:          true,
+          email:             true,
+          phone:             true,
+          team:              true,
+          region:            true,
+          state:             true,
+          profilePictureUrl: true,
+          idCardUrl:         true,
+          isActive:          true,
+          reportsToId:       true,
+        },
       });
       if (nextLevel.length === 0) break;
 
+      allDownstreamUsers.push(...nextLevel);
       allDownstreamUserIds.push(...nextLevel.map((u) => u.id));
       currentLevelIds = nextLevel.map((u) => u.id);
     }
 
     if (allDownstreamUserIds.length === 0) {
-      return { totalTeamSize: 0, byCategory: [] };
+      return { totalTeamSize: 0, byCategory: [], allMembers: [] };
     }
 
     // Aggregate every downstream user's performance and roll up by
@@ -342,6 +395,9 @@ export class DashboardService {
     return {
       totalTeamSize: allDownstreamUserIds.length,
       byCategory,
+      // Full user profiles for every member in the downstream tree,
+      // grouped by tier so the frontend can render a hierarchical view
+      allMembers: allDownstreamUsers,
     };
   }
 }

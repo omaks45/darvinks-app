@@ -1,4 +1,4 @@
-
+// src/modules/target-assignments/target-assignment.service.ts
 import {
   BadRequestException,
   ConflictException,
@@ -63,7 +63,7 @@ export class TargetAssignmentService {
 
   constructor(private readonly prisma: PrismaService) {}
 
-  // ── Create root target (Sales Head -> Tier4) ────────────────────────────────
+  // ── Create root targets (Sales Head -> Tier4) — bulk by category ──────────
 
   async createRoot(dto: CreateRootTargetDto, requester: JwtPayload) {
     if (requester.tier !== UserTier.TIER5_SALES_HEAD) {
@@ -80,28 +80,41 @@ export class TargetAssignmentService {
 
     this.assertPeriodFieldsMatch(dto.period, dto);
 
-    const assignment = await this.prisma.targetAssignment.create({
-      data: {
-        assignedById:       requester.sub,
-        assignedToId:       assignee.id,
-        category:           dto.category,
-        period:             dto.period,
-        year:               dto.year,
-        quarter:            dto.quarter ?? null,
-        month:              dto.month  ?? null,
-        week:               dto.week   ?? null,
-        targetCartons:      dto.targetCartons,
-        parentAssignmentId: null, // root — nothing above the Sales Head in this chain
-        note:               dto.note ?? null,
-      },
-      select: ASSIGNMENT_SELECT,
-    });
+    // Validate no duplicate categories in the same request
+    const cats = dto.categories.map((c) => c.category);
+    if (new Set(cats).size !== cats.length) {
+      throw new BadRequestException(
+        'Each category may appear at most once per bulk assignment',
+      );
+    }
+
+    // Create one TargetAssignment row per category in a single transaction
+    const assignments = await this.prisma.$transaction(
+      dto.categories.map((entry) =>
+        this.prisma.targetAssignment.create({
+          data: {
+            assignedById:       requester.sub,
+            assignedToId:       assignee.id,
+            category:           entry.category,
+            period:             dto.period,
+            year:               dto.year,
+            quarter:            dto.quarter ?? null,
+            month:              dto.month   ?? null,
+            week:               dto.week    ?? null,
+            targetCartons:      entry.targetCartons,
+            parentAssignmentId: null,
+            note:               entry.note ?? null,
+          },
+          select: ASSIGNMENT_SELECT,
+        }),
+      ),
+    );
 
     this.logger.log(
-      `Root target created: ${dto.targetCartons} ${dto.category} cartons ` +
-      `for ${assignee.fullName} by Sales Head ${requester.sub}`,
+      `Root targets created for ${assignee.fullName} by Sales Head ${requester.sub}: ` +
+      dto.categories.map((c) => `${c.category}=${c.targetCartons}`).join(', '),
     );
-    return assignment;
+    return assignments;
   }
 
   // ── Split a target among direct reports ──────────────────────────────────

@@ -1,4 +1,4 @@
-
+// src/common/services/google-vision.service.ts
 // Uses Google Cloud Vision API to extract text from invoice images/PDFs
 // and compares the extracted line items against the Purchase Order.
 
@@ -35,12 +35,35 @@ export class GoogleVisionService {
   private readonly endpoint = 'https://vision.googleapis.com/v1/images:annotate';
 
   constructor(private readonly config: ConfigService) {
-    const raw = this.config.get<string>('GOOGLE_APPLICATION_CREDENTIALS_JSON') ?? '{}';
+    // GOOGLE_APPLICATION_CREDENTIALS in .env can be:
+    //   (a) An inline JSON string starting with { ... }
+    //   (b) A file path to a service account JSON key file
+    //
+    // We read directly from process.env because ConfigService only exposes
+    // keys explicitly mapped in app.config.ts — using process.env ensures
+    // we catch the value even if the config factory doesn't forward it yet.
+    const raw = process.env.GOOGLE_APPLICATION_CREDENTIALS ?? '';
+
     try {
-      this.credentials = JSON.parse(raw);
-    } catch {
+      if (!raw) {
+        this.credentials = {};
+      } else if (raw.trim().startsWith('{')) {
+        // (a) Inline JSON — value IS the service account JSON
+        this.credentials = JSON.parse(raw);
+        this.logger.log('Google Vision: loaded credentials from inline JSON');
+      } else {
+        // (b) File path — read the key file from disk
+        // eslint-disable-next-line @typescript-eslint/no-require-imports
+        const fs = require('fs') as typeof import('fs');
+        const resolved = raw.startsWith('/') || raw.includes(':')
+          ? raw                          // absolute path
+          : require('path').join(process.cwd(), raw); // relative to project root
+        this.credentials = JSON.parse(fs.readFileSync(resolved, 'utf8'));
+        this.logger.log(`Google Vision: loaded credentials from file: ${resolved}`);
+      }
+    } catch (err: any) {
       this.credentials = {};
-      this.logger.warn('GOOGLE_APPLICATION_CREDENTIALS_JSON is not valid JSON');
+      this.logger.warn(`Google Vision: failed to parse credentials — ${err.message}`);
     }
   }
 
@@ -83,6 +106,7 @@ export class GoogleVisionService {
       }
 
       const rawText = json.responses[0]?.fullTextAnnotation?.text ?? '';
+      this.logger.debug(`Vision OCR extracted text:\n${rawText.slice(0, 500)}`);
 
       return {
         rawText,
@@ -114,9 +138,21 @@ export class GoogleVisionService {
   ): ComparisonResult {
     const mismatches: ComparisonResult['mismatches'] = [];
 
-    // 1. Total amount check
-    if (extracted.totalKobo !== null) {
-      const tolerance = Math.round(po.totalKobo * 0.01); // 1% tolerance for rounding
+    // ── Strategy: quantity-set matching ────────────────────────────────────
+    //
+    // Handwritten invoices have inconsistent spelling, OCR errors, and
+    // abbreviated trade names. Matching on product names is unreliable.
+    //
+    // Instead we compare the SET of quantities on the invoice against the
+    // SET of quantities on the PO. If every PO quantity appears in the
+    // invoice quantities (within ±1 tolerance for rounding), we qualify.
+    //
+    // Additionally we check the grand total if OCR extracted it — this is
+    // the most reliable signal since totals are printed in large numerals.
+
+    // 1. Grand total check (most reliable — large printed numbers)
+    if (extracted.totalKobo !== null && extracted.totalKobo > 0) {
+      const tolerance = Math.round(po.totalKobo * 0.02); // 2% — OCR can misread commas
       if (Math.abs(extracted.totalKobo - po.totalKobo) > tolerance) {
         mismatches.push({
           field:    'totalAmount',
@@ -126,35 +162,34 @@ export class GoogleVisionService {
       }
     }
 
-    // 2. Line item quantity checks
-    for (const poItem of po.items) {
-      const matchedLine = extracted.lineItems.find((li) =>
-        li.productName
-          .toLowerCase()
-          .includes(poItem.product.name.toLowerCase().split(' ')[0]),
-      );
+    // 2. Quantity-set check — every PO quantity must appear in extracted quantities
+    // Extract all numbers from the invoice that plausibly represent carton quantities
+    // (between 1 and 9999 — avoids matching prices, dates, phone numbers)
+    const invoiceQtys = extracted.lineItems.map((li) => li.quantity);
 
-      if (!matchedLine) {
+    // Group PO items by quantity — duplicate quantities (e.g. two lines of 50)
+    // must each have a corresponding entry on the invoice
+    const poQtyPool = po.items.map((i) => i.quantityCartons).sort((a, b) => a - b);
+    const invQtyPool = [...invoiceQtys].sort((a, b) => a - b);
+
+    // Match each PO quantity against an unmatched invoice quantity
+    const unmatchedInv = [...invQtyPool];
+    for (const poQty of poQtyPool) {
+      const idx = unmatchedInv.findIndex((iq) => Math.abs(iq - poQty) <= 1);
+      if (idx === -1) {
         mismatches.push({
-          field:    `item.${poItem.product.name}`,
-          expected: poItem.quantityCartons,
+          field:    `quantity.${poQty}cartons`,
+          expected: poQty,
           actual:   'not found on invoice',
         });
-        continue;
-      }
-
-      if (matchedLine.quantity !== poItem.quantityCartons) {
-        mismatches.push({
-          field:    `item.${poItem.product.name}.quantity`,
-          expected: poItem.quantityCartons,
-          actual:   matchedLine.quantity,
-        });
+      } else {
+        unmatchedInv.splice(idx, 1); // consume this match
       }
     }
 
+    // 3. Confidence: base 1.0, penalise per mismatch
     const matches    = mismatches.length === 0;
-    // Confidence: penalise for each unmatched field
-    const confidence = Math.max(0, 1 - mismatches.length * 0.2);
+    const confidence = Math.max(0, 1 - mismatches.length * 0.25);
 
     return { matches, mismatches, confidence };
   }
@@ -208,24 +243,53 @@ export class GoogleVisionService {
     const lines = text.split('\n').filter((l) => l.trim());
     const items: InvoiceLineItem[] = [];
 
-    // Look for lines containing quantity patterns (e.g. "12 cartons", "x12", "QTY: 12")
-    const qtyRegex    = /(\d+)\s*(cartons?|ctns?|pcs?|units?|x)/i;
-    const priceRegex  = /[₦N#]\s*([\d,]+(?:\.\d{2})?)/;
+    // Primary strategy for handwritten/printed invoices:
+    // Find lines that START with a small integer (1–9999) — these are quantities.
+    // The quantity is almost always the first token on a line item row.
+    // We deliberately ignore product names because OCR + handwriting make them
+    // unreliable. We care only about the number.
+    //
+    // Exclusion rules to avoid false positives:
+    //   - Skip lines that look like dates (dd/mm/yyyy or dd.mm.yy)
+    //   - Skip lines that look like phone numbers (> 7 consecutive digits)
+    //   - Skip lines that are clearly headers (QTY, NO., S/N etc.)
+    //   - Quantity must be 1–9999 (real carton counts)
+
+    const headerWords = /^(qty|no|s\/n|sn|ref|date|inv|invoice|total|amount|rate|desc)/i;
+    const datePattern = /^\d{1,2}[\/\-.\s]\d{1,2}[\/\-.\s]\d{2,4}/;
+    const phonePattern = /\d{7,}/;
 
     for (const line of lines) {
-      const qtyMatch   = line.match(qtyRegex);
-      const priceMatch = line.match(priceRegex);
+      const trimmed = line.trim();
 
-      if (qtyMatch) {
-        items.push({
-          productName: line.replace(qtyRegex, '').replace(priceRegex, '').trim(),
-          quantity:    parseInt(qtyMatch[1], 10),
-          unitPrice:   null,
-          lineTotal:   priceMatch
-            ? Math.round(parseFloat(priceMatch[1].replace(/,/g, '')) * 100)
-            : null,
-        });
-      }
+      // Skip obvious header/footer lines
+      if (headerWords.test(trimmed)) continue;
+      if (datePattern.test(trimmed))  continue;
+
+      // Extract the first number from the line
+      const firstNumMatch = trimmed.match(/^(\d{1,4})(?:\s|$)/);
+      if (!firstNumMatch) continue;
+
+      const qty = parseInt(firstNumMatch[1], 10);
+
+      // Valid quantity range: 1 to 9999 cartons
+      if (qty < 1 || qty > 9999) continue;
+
+      // Skip if the rest of the line looks like a phone number
+      if (phonePattern.test(trimmed.slice(firstNumMatch[0].length))) continue;
+
+      // Extract whatever description follows the quantity
+      const description = trimmed.slice(firstNumMatch[0].length).trim();
+
+      // Must have some description text (not just a bare number)
+      if (description.length < 2) continue;
+
+      items.push({
+        productName: description,
+        quantity:    qty,
+        unitPrice:   null,
+        lineTotal:   null,
+      });
     }
 
     return items;

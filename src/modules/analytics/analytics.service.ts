@@ -54,33 +54,104 @@ export class AnalyticsService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
-   * Aggregates all data for the given period month (format: "2026-07").
-   * Called by both the weekly BullMQ job and the download endpoint.
+   * Aggregates all data for a given period.
+   * Called by both the weekly BullMQ job and the on-demand download endpoint.
+   *
+   * period formats:
+   *   monthly:   "2026-07"
+   *   quarterly: "2026-Q2"
+   *   annual:    "2026"
+   *   weekly:    "2026-W30"  (ISO week — Monday-to-Sunday window)
    */
-  async buildReportData(periodMonth: string): Promise<AnalyticsReportData> {
-    this.logger.log(`Building analytics report for ${periodMonth}`);
+  async buildReportData(
+    period: string,
+    periodType: 'weekly' | 'monthly' | 'quarterly' | 'annual' = 'monthly',
+  ): Promise<AnalyticsReportData> {
+    this.logger.log(`Building analytics report — ${periodType}: ${period}`);
 
-    const [year, month] = periodMonth.split('-').map(Number);
-    const startOfMonth  = new Date(year, month - 1, 1);
-    const endOfMonth    = new Date(year, month, 1);
+    const { startDate, endDate, periodMonth } =
+      this.resolveDateRange(period, periodType);
 
-    const [
-      locationPerformance,
-      userPerformance,
-      orgSummary,
-    ] = await Promise.all([
-      this.buildLocationPerformance(periodMonth, startOfMonth, endOfMonth),
-      this.buildUserPerformance(year, month, startOfMonth, endOfMonth),
-      this.buildOrgSummary(startOfMonth, endOfMonth),
-    ]);
+    // TargetAssignment is still queried by year+month — for non-monthly
+    // periods we use the period's start date year and month as the
+    // representative period for target lookups, since TargetAssignment
+    // granularity is MONTHLY. For quarterly/annual, this means we aggregate
+    // achievement across the full range but compare against a single month's
+    // target as a reference point. A multi-month target aggregation would
+    // need target rows per month to exist, which is the correct setup.
+    const [year, month] = [startDate.getFullYear(), startDate.getMonth() + 1];
+
+    const [locationPerformance, userPerformance, orgSummary] =
+      await Promise.all([
+        this.buildLocationPerformance(periodMonth, startDate, endDate),
+        this.buildUserPerformance(year, month, startDate, endDate),
+        this.buildOrgSummary(startDate, endDate),
+      ]);
 
     return {
-      periodMonth,
+      periodMonth: period,   // keep the original string so the filename is descriptive
       generatedAt: new Date(),
       locationPerformance,
       userPerformance,
       orgSummary,
     };
+  }
+
+  /**
+   * Resolves a human-readable period string into a concrete date range.
+   * Returns startDate (inclusive) and endDate (exclusive) — same open-
+   * interval convention used everywhere else in the codebase.
+   */
+  private resolveDateRange(
+    period: string,
+    periodType: 'weekly' | 'monthly' | 'quarterly' | 'annual',
+  ): { startDate: Date; endDate: Date; periodMonth: string } {
+    switch (periodType) {
+      case 'monthly': {
+        // "2026-07"
+        const [y, m] = period.split('-').map(Number);
+        return {
+          startDate:   new Date(y, m - 1, 1),
+          endDate:     new Date(y, m, 1),
+          periodMonth: period,
+        };
+      }
+      case 'quarterly': {
+        // "2026-Q2" → April 1 – July 1
+        const [y, q] = period.split('-Q').map(Number);
+        const startMonth = (q - 1) * 3; // Q1=0, Q2=3, Q3=6, Q4=9
+        return {
+          startDate:   new Date(y, startMonth, 1),
+          endDate:     new Date(y, startMonth + 3, 1),
+          periodMonth: `${y}-${String(startMonth + 1).padStart(2, '0')}`,
+        };
+      }
+      case 'annual': {
+        // "2026" → Jan 1 – Jan 1 next year
+        const y = Number(period);
+        return {
+          startDate:   new Date(y, 0, 1),
+          endDate:     new Date(y + 1, 0, 1),
+          periodMonth: `${y}-01`,
+        };
+      }
+      case 'weekly': {
+        // "2026-W30" — ISO week: find the Monday of that week
+        const [y, w] = period.split('-W').map(Number);
+        const jan4   = new Date(y, 0, 4); // Jan 4 is always in ISO week 1
+        const week1Monday = new Date(jan4);
+        week1Monday.setDate(jan4.getDate() - ((jan4.getDay() + 6) % 7));
+        const monday = new Date(week1Monday);
+        monday.setDate(week1Monday.getDate() + (w - 1) * 7);
+        const sunday = new Date(monday);
+        sunday.setDate(monday.getDate() + 7);
+        return {
+          startDate:   monday,
+          endDate:     sunday,
+          periodMonth: `${y}-${String(monday.getMonth() + 1).padStart(2, '0')}`,
+        };
+      }
+    }
   }
 
   // ── Location performance (TGT / ACHV / BAL per location per category) ─────
@@ -345,9 +416,9 @@ export class AnalyticsService {
     return {
       totalActiveUsers,
       totalActiveCustomers,
-      totalCollectionsKobo:       collectionsAgg._sum.amountKobo      ?? 0,
-      totalPOValueKobo:           poAgg._sum.totalKobo                ?? 0,
-      totalSecondarySaleCartons:  ssAgg._sum.quantityCartons          ?? 0,
+      totalCollectionsKobo:       Number(collectionsAgg._sum.amountKobo   ?? 0),
+      totalPOValueKobo:           Number(poAgg._sum.totalKobo              ?? 0),
+      totalSecondarySaleCartons:  Number(ssAgg._sum.quantityCartons        ?? 0),
     };
   }
 }

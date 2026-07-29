@@ -94,7 +94,8 @@ describe('SecondarySaleService', () => {
   beforeEach(async () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
-        SecondarySaleService,
+        // instantiate service manually to avoid needing GoogleMapsService dependency
+        { provide: SecondarySaleService, useFactory: () => new SecondarySaleService(mockPrisma as any, {} as any) },
         { provide: PrismaService, useValue: mockPrisma },
       ],
     }).compile();

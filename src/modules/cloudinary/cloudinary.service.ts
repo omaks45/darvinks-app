@@ -1,4 +1,4 @@
-// src/modules/cloudinary/cloudinary.service.ts
+
 import { Injectable, InternalServerErrorException, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { v2 as cloudinary, UploadApiResponse } from 'cloudinary';
@@ -14,7 +14,9 @@ export type CloudinaryFolder =
   | 'cheques'
   | 'payments'
   | 'delivery-orders'
-  | 'competitor-reports';
+  | 'competitor-reports'
+  | 'competitor-reports'
+  | `analytics/${string}`;
 
 @Injectable()
 export class CloudinaryService {

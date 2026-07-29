@@ -7,6 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { PrismaService } from '@common/prisma/prisma.service';
+import { CloudinaryService } from '@modules/cloudinary/cloudinary.service';
 import { Region } from '@prisma/client';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type {
@@ -41,11 +42,18 @@ const REPORT_SELECT = {
 export class CompetitorReportService {
   private readonly logger = new Logger(CompetitorReportService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma:     PrismaService,
+    private readonly cloudinary: CloudinaryService,
+  ) {}
 
   // ── Create ─────────────────────────────────────────────────────────────────
 
-  async create(dto: CreateCompetitorReportDto, requester: JwtPayload) {
+  async create(
+    dto:       CreateCompetitorReportDto,
+    file:      Express.Multer.File | undefined,
+    requester: JwtPayload,
+  ) {
     if (!FIELD_TIERS.includes(requester.tier as string)) {
       throw new ForbiddenException(
         'Only field staff (Tier 1-4) can submit competitor reports',
@@ -59,6 +67,27 @@ export class CompetitorReportService {
       throw new BadRequestException(
         'Your account has no region set — cannot submit a report',
       );
+    }
+
+    // Upload media file to Cloudinary for non-text reports
+    let mediaUrl: string | null = dto.mediaUrl ?? null;
+    if (file && dto.mediaType !== 'TEXT') {
+      const resourceType = dto.mediaType === 'VIDEO'
+        ? 'video'
+        : dto.mediaType === 'PDF'
+          ? 'raw'
+          : 'image';
+
+      const uploadResult = await this.cloudinary.uploadBuffer(
+        file.buffer,
+        'competitor-reports',
+        {
+          publicId:     `${requester.sub}-${Date.now()}`,
+          resourceType: resourceType as any,
+        },
+      );
+      mediaUrl = uploadResult.secure_url;
+      this.logger.log(`Competitor report media uploaded: ${mediaUrl}`);
     }
 
     const report = await this.prisma.competitorReport.create({
@@ -77,7 +106,7 @@ export class CompetitorReportService {
         // an Admin-facing edit endpoint could backfill it later if needed.
         state:         null,
         mediaType:     dto.mediaType,
-        mediaUrl:      dto.mediaUrl ?? null,
+        mediaUrl:      mediaUrl,
         textContent:   dto.textContent ?? null,
         tags:          dto.tags ?? [],
       },

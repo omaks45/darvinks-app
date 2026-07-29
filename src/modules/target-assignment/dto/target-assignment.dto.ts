@@ -15,14 +15,27 @@ import {
 import { Type } from 'class-transformer';
 import { ProductCategory, TargetPeriod } from '@prisma/client';
 
-export class CreateRootTargetDto {
-    @ApiProperty({ description: 'Tier4 user UUID receiving this target directly from the Sales Head' })
-    @IsUUID()
-    assignedToId: string;
-
-    @ApiProperty({ enum: ProductCategory })
+// One category entry in a bulk assignment
+export class CategoryTargetEntry {
+    @ApiProperty({ enum: ProductCategory, description: 'Product category for this target' })
     @IsEnum(ProductCategory)
     category: ProductCategory;
+
+    @ApiProperty({ example: 1000, description: 'Target in cartons for this category' })
+    @IsInt()
+    @Min(1)
+    targetCartons: number;
+
+    @ApiPropertyOptional()
+    @IsOptional()
+    @IsString()
+    note?: string;
+}
+
+export class CreateRootTargetDto {
+    @ApiProperty({ description: 'Tier4 user UUID receiving these targets directly from the Sales Head' })
+    @IsUUID()
+    assignedToId: string;
 
     @ApiProperty({ enum: TargetPeriod, default: 'MONTHLY' })
     @IsEnum(TargetPeriod)
@@ -53,15 +66,23 @@ export class CreateRootTargetDto {
     @Max(53)
     week?: number;
 
-    @ApiProperty({ example: 1000 })
-    @IsInt()
-    @Min(1)
-    targetCartons: number;
-
-    @ApiPropertyOptional()
-    @IsOptional()
-    @IsString()
-    note?: string;
+    @ApiProperty({
+        type: [CategoryTargetEntry],
+        description:
+        'One or more category targets to assign in one request. ' +
+        'Each category may appear at most once. ' +
+        'Example: assign LOTION + CREAM + SOAP targets in a single call.',
+        example: [
+        { category: 'LOTION', targetCartons: 1000 },
+        { category: 'CREAM',  targetCartons: 500  },
+        { category: 'SOAP',   targetCartons: 300  },
+        ],
+    })
+    @IsArray()
+    @ArrayMinSize(1)
+    @ValidateNested({ each: true })
+    @Type(() => CategoryTargetEntry)
+    categories: CategoryTargetEntry[];
 }
 
 export class ChildSplitDto {

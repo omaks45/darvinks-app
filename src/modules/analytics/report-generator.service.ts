@@ -1,5 +1,4 @@
 
-//
 // Generates PPT and Excel reports from AnalyticsReportData.
 // Kept separate from AnalyticsService (data) so each concern is tested
 // and modified independently — data shape changes don't require touching
@@ -35,18 +34,18 @@ const LOC_COLS = [2.0, 1.2, 1.2, 1.2, 1.0];   // Location | TGT | ACHV | BAL | %
 const USR_COLS = [1.8, 1.0, 1.4, 1.0, 1.0, 1.0, 1.0]; // Name | Ref | Tier | Cat | TGT | ACHV | %
 
 function formatKobo(kobo: number): string {
-    return `₦${(kobo / 100).toLocaleString('en-NG', { minimumFractionDigits: 2 })}`;
+  return `₦${(kobo / 100).toLocaleString('en-NG', { minimumFractionDigits: 2 })}`;
 }
 
 function formatCartons(n: number): string {
-    return n.toLocaleString('en-NG');
+  return n.toLocaleString('en-NG');
 }
 
 @Injectable()
 export class ReportGeneratorService {
     private readonly logger = new Logger(ReportGeneratorService.name);
 
-    //PPT
+    // ── PPT ─────────────────────────────────────────────────────────────────────
 
     async generatePpt(
         data: AnalyticsReportData,
@@ -59,20 +58,20 @@ export class ReportGeneratorService {
         pptx.defineLayout({ name: 'WIDESCREEN', width: 10, height: 5.63 });
         pptx.layout = 'WIDESCREEN';
 
-        //  Slide 1: Cover
+        // ── Slide 1: Cover ───────────────────────────────────────────────────────
         this.addCoverSlide(pptx, data);
 
-        //  Slide 2: Org summary (org scope only)
+        // ── Slide 2: Org summary (org scope only) ────────────────────────────────
         if (scope === 'org') {
         this.addOrgSummarySlide(pptx, data);
         }
 
-        // Slides 3+: Location performance (TGT/ACHV/BAL)
+        // ── Slides 3+: Location performance (TGT/ACHV/BAL) ──────────────────────
         if (scope === 'org' && data.locationPerformance.length > 0) {
         this.addLocationPerformanceSlides(pptx, data.locationPerformance);
         }
 
-        // Slides: User performance (personal or all-user for org)
+        // ── Slides: User performance (personal or all-user for org) ──────────────
         const perfRows = scope === 'personal' && userId
         ? data.userPerformance.filter((r) => r.userId === userId)
         : data.userPerformance;
@@ -81,14 +80,14 @@ export class ReportGeneratorService {
         this.addUserPerformanceSlides(pptx, perfRows, scope, data.periodMonth);
         }
 
-        // Final slide: Thank you 
+        // ── Final slide: Thank you ────────────────────────────────────────────────
         this.addClosingSlide(pptx, data.periodMonth);
 
-        const buffer = await pptx.write({ outputType: 'nodebuffer' }) as Buffer;
-        return buffer;
+        const raw = await pptx.write({ outputType: 'nodebuffer' });
+        return Buffer.isBuffer(raw) ? raw : Buffer.from(raw as ArrayBuffer);
     }
 
-    // Excel (org scope only — System Admin) 
+    // ── Excel (org scope only — System Admin) ───────────────────────────────────
 
     async generateExcel(data: AnalyticsReportData): Promise<Buffer> {
         this.logger.log(`Generating Excel for period=${data.periodMonth}`);
@@ -98,15 +97,15 @@ export class ReportGeneratorService {
         workbook.created  = data.generatedAt;
         workbook.modified = data.generatedAt;
 
-        // Sheet 1: Org Summary
+        // ── Sheet 1: Org Summary ─────────────────────────────────────────────────
         this.addOrgSummarySheet(workbook, data);
 
-        // Sheet 2: Location Performance
+        // ── Sheet 2: Location Performance ────────────────────────────────────────
         if (data.locationPerformance.length > 0) {
         this.addLocationSheet(workbook, data.locationPerformance, data.periodMonth);
         }
 
-        // Sheet 3: User Performance
+        // ── Sheet 3: User Performance ─────────────────────────────────────────────
         if (data.userPerformance.length > 0) {
         this.addUserSheet(workbook, data.userPerformance, data.periodMonth);
         }
@@ -115,7 +114,7 @@ export class ReportGeneratorService {
         return Buffer.from(arrayBuffer);
     }
 
-    // PPT slide builders
+    // ── PPT slide builders ────────────────────────────────────────────────────
 
     private addCoverSlide(pptx: PptxGenJS, data: AnalyticsReportData) {
         const slide = pptx.addSlide();
@@ -368,7 +367,7 @@ export class ReportGeneratorService {
         });
     }
 
-    // Excel sheet builders
+    // ── Excel sheet builders ──────────────────────────────────────────────────
 
     private addOrgSummarySheet(workbook: ExcelJS.Workbook, data: AnalyticsReportData) {
         const sheet = workbook.addWorksheet('Summary');

@@ -5,8 +5,6 @@ import {
     IsArray,
     IsEnum,
     IsInt,
-    IsISO8601,
-    IsNotEmpty,
     IsOptional,
     IsString,
     IsUUID,
@@ -85,17 +83,17 @@ export class RecordPaymentDto {
 }
 
 // ── Upload document ────────────────────────────────────────────────────────────
+// The document file is uploaded directly via multipart/form-data.
+// The server handles Cloudinary upload and stores the resulting URL.
+// The client only needs to send: documentType (text field) + file (file field).
 export class UploadDocumentDto {
     @ApiProperty({
         enum: ['kdInvoiceUrl', 'chequeUrl', 'formalInvoiceUrl', 'deliveryOrderUrl'],
+        description: 'Which document slot to fill on the purchase order',
+        example: 'kdInvoiceUrl',
     })
     @IsEnum(['kdInvoiceUrl', 'chequeUrl', 'formalInvoiceUrl', 'deliveryOrderUrl'])
     documentType: 'kdInvoiceUrl' | 'chequeUrl' | 'formalInvoiceUrl' | 'deliveryOrderUrl';
-
-    @ApiProperty({ description: 'Cloudinary URL of the uploaded document' })
-    @IsString()
-    @IsNotEmpty()
-    url: string;
 }
 
 // ── Qualify invoice ────────────────────────────────────────────────────────────
