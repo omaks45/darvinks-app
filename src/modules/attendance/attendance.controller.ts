@@ -1,3 +1,4 @@
+
 import {
   Body,
   Controller,
@@ -16,6 +17,7 @@ import {
   ApiBearerAuth,
   ApiConsumes,
   ApiOperation,
+  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 
@@ -42,6 +44,10 @@ const MAX_ATTENDANCE_PHOTO_BYTES = 10 * 1024 * 1024; // 10 MB
 export class AttendanceController {
   constructor(private readonly attendanceService: AttendanceService) {}
 
+  @ApiResponse({ status: 201, description: 'Clocked in successfully. Photo uploaded to Cloudinary. Address resolved from GPS via Google Maps.', schema: { example: { success: true, data: { id: 'event-id', userId: 'agent-id', type: 'CLOCK_IN', latitude: 6.5244, longitude: 3.3792, address: '12 Kolade Street, Ilupeju, Lagos', photoUrl: 'https://res.cloudinary.com/dwiouwwom/image/upload/v.../photo.jpg', deviceTime: '2026-07-29T08:45:00.000Z', serverTime: '2026-07-29T08:45:02.000Z', flag: 'ON_TIME', note: null, createdAt: '2026-07-29T08:45:02.000Z' }, timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 400, description: 'Photo file required or already clocked in today', schema: { example: { success: false, statusCode: 400, message: 'A photo is required for attendance. Send the image as multipart/form-data with field name \"photo\".', timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 409, description: 'Already clocked in today', schema: { example: { success: false, statusCode: 409, message: 'You have already clocked in today', timestamp: '2026-07-29T12:00:00.000Z' } } })
   @Post('clock-in')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Submit clock-in (GPS photo mandatory, gallery blocked)' })
@@ -60,6 +66,9 @@ export class AttendanceController {
     return this.attendanceService.clockIn(user, dto, photo);
   }
 
+  @ApiResponse({ status: 201, description: 'Clocked out successfully.', schema: { example: { success: true, data: { id: 'event-id', userId: 'agent-id', type: 'CLOCK_OUT', latitude: 6.5244, longitude: 3.3792, address: '12 Kolade Street, Ilupeju, Lagos', photoUrl: 'https://res.cloudinary.com/dwiouwwom/image/upload/v.../photo.jpg', deviceTime: '2026-07-29T17:00:00.000Z', serverTime: '2026-07-29T17:00:02.000Z', flag: 'ON_TIME', note: null, createdAt: '2026-07-29T17:00:02.000Z' }, timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 400, description: 'Photo required or no clock-in found for today', schema: { example: { success: false, statusCode: 400, message: 'You have not clocked in today', timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-07-29T12:00:00.000Z' } } })
   @Post('clock-out')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Submit clock-out (GPS photo mandatory)' })
@@ -117,6 +126,8 @@ export class AttendanceController {
     return this.attendanceService.syncOfflineBatch(user, events, photos);
   }
 
+  @ApiResponse({ status: 200, description: 'Attendance history for the requesting user. Admins can filter by userId.', schema: { example: { success: true, data: [{ id: 'event-id', userId: 'agent-id', type: 'CLOCK_IN', latitude: 6.5244, longitude: 3.3792, address: '12 Kolade Street, Ilupeju, Lagos', photoUrl: 'https://res.cloudinary.com/dwiouwwom/image/upload/v.../photo.jpg', deviceTime: '2026-07-29T08:45:00.000Z', serverTime: '2026-07-29T08:45:02.000Z', flag: 'ON_TIME', note: null, createdAt: '2026-07-29T08:45:02.000Z' }], timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-07-29T12:00:00.000Z' } } })
   @Get()
   @ApiOperation({ summary: 'Query attendance events (visibility enforced per tier)' })
   findEvents(

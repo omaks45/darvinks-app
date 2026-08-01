@@ -1,4 +1,4 @@
-// src/modules/warehouse/warehouse.controller.ts
+
 import {
   Body,
   Controller,
@@ -17,6 +17,7 @@ import {
   ApiBody,
   ApiOperation,
   ApiParam,
+  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import { WarehouseLocation } from '@prisma/client';
@@ -40,6 +41,8 @@ export class WarehouseController {
 
   // ── Stock levels (readable by all authenticated users) ─────────────────────
 
+  @ApiResponse({ status: 200, description: 'Current stock levels. Filter by warehouseLocation to see a specific warehouse.', schema: { example: { success: true, data: [{ id: 'stock-id', productId: 'prod-id', product: { name: 'Visita Essence B Whitening Lotion (250ml)', category: 'LOTION' }, warehouseLocation: 'LAGOS_HQ', quantityCartons: 200, updatedAt: '2026-07-25T10:49:41.366Z' }], timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-07-29T12:00:00.000Z' } } })
   @Get('stock')
   @ApiOperation({
     summary: 'Get current stock levels',
@@ -63,6 +66,9 @@ export class WarehouseController {
 
   // ── Stock movements (Warehouse Admin / System Admin only) ──────────────────
 
+  @ApiResponse({ status: 201, description: 'Inbound stock recorded. quantityCartons added to existing stock for that product + warehouse location.', schema: { example: { success: true, data: { id: 'stock-id', productId: 'prod-id', product: { name: 'Visita Essence B Whitening Lotion (250ml)', category: 'LOTION' }, warehouseLocation: 'LAGOS_HQ', quantityCartons: 200, updatedAt: '2026-07-25T10:49:41.366Z' }, timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 403, description: 'Only Warehouse Admin or System Admin can record inbound stock', schema: { example: { success: false, statusCode: 403, message: 'Forbidden resource', timestamp: '2026-07-29T12:00:00.000Z' } } })
   @Post('inbound')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({

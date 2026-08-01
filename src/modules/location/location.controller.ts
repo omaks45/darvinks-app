@@ -3,7 +3,7 @@ import {
   Body, Controller, Delete, Get, HttpCode, HttpStatus,
   Param, ParseUUIDPipe, Patch, Post, Query, UseGuards,
 } from '@nestjs/common';
-import { ApiBearerAuth, ApiOperation, ApiParam, ApiTags } from '@nestjs/swagger';
+import { ApiBearerAuth, ApiOperation, ApiParam, ApiResponse, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
@@ -18,6 +18,9 @@ import { UpdateLocationDto } from './dto/update-location.dto';
 export class LocationController {
   constructor(private readonly locationService: LocationService) {}
 
+  @ApiResponse({ status: 201, description: 'Location created.', schema: { example: { success: true, data: { id: 'loc-id', name: 'Oyingbo Market', state: 'lagos', region: 'SOUTH_WEST', createdAt: '2026-07-29T12:00:00.000Z' }, timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 403, description: 'Only Admin or Sales Head can create locations', schema: { example: { success: false, statusCode: 403, message: 'Forbidden resource', timestamp: '2026-07-29T12:00:00.000Z' } } })
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Create a location (Admin/Sales Head only)' })
@@ -25,6 +28,8 @@ export class LocationController {
     return this.locationService.create(dto, user);
   }
 
+  @ApiResponse({ status: 200, description: 'All seeded Nigerian market towns and locations. Filter by region or state.', schema: { example: { success: true, data: [{ id: 'loc-id', name: 'Ikeja', state: 'lagos', region: 'SOUTH_WEST', createdAt: '2026-07-25T10:49:41.366Z' }], timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-07-29T12:00:00.000Z' } } })
   @Get()
   @ApiOperation({ summary: 'List all locations, optionally filtered by region/state' })
   findAll(@Query() query: LocationQueryDto) {

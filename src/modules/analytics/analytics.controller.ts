@@ -4,7 +4,7 @@ import {
 } from '@nestjs/common';
 import { Response } from 'express';
 import {
-  ApiBearerAuth, ApiOperation, ApiQuery, ApiTags,
+  ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
@@ -64,6 +64,8 @@ export class AnalyticsController {
 
   // ── PPT download ────────────────────────────────────────────────────────────
 
+  @ApiResponse({ status: 200, description: 'PowerPoint report (.pptx) downloaded as binary. Field staff get personal performance deck; Sales Head and Admin get org-wide deck. Set Postman response type to \"Send and Download\" to save the file.', content: { 'application/vnd.openxmlformats-officedocument.presentationml.presentation': { schema: { type: 'string', format: 'binary' } } } })
+  @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-07-29T12:00:00.000Z' } } })
   @Get('report/ppt')
   @ApiOperation({
     summary: 'Download the performance report as a PowerPoint file',
@@ -110,6 +112,9 @@ export class AnalyticsController {
 
   // ── Excel download ─────────────────────────────────────────────────────────
 
+  @ApiResponse({ status: 200, description: 'Excel report (.xlsx) downloaded as binary. Available to Sales Head and System Admin only. GM is excluded.', content: { 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': { schema: { type: 'string', format: 'binary' } } } })
+  @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 403, description: 'GM and field staff cannot download Excel', schema: { example: { success: false, statusCode: 403, message: 'Forbidden resource', timestamp: '2026-07-29T12:00:00.000Z' } } })
   @Get('report/excel')
   @ApiOperation({
     summary: 'Download the report as Excel (System Admin and Sales Head only)',
@@ -155,6 +160,9 @@ export class AnalyticsController {
 
   // ── Manual trigger (System Admin only) ────────────────────────────────────
 
+  @ApiResponse({ status: 200, description: 'Report generation queued as a background job. Report will be available via GET /analytics/report/ppt within 30-60 seconds.', schema: { example: { success: true, data: { message: 'Analytics report generation queued', period: '2026-07', periodType: 'monthly' }, timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 403, description: 'Only System Admin can manually trigger reports', schema: { example: { success: false, statusCode: 403, message: 'Forbidden resource', timestamp: '2026-07-29T12:00:00.000Z' } } })
   @Post('trigger')
   @ApiOperation({
     summary: 'Manually trigger a report generation job (System Admin only)',

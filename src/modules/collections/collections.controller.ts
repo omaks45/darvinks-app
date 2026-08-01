@@ -16,6 +16,7 @@ import {
   ApiBody,
   ApiOperation,
   ApiParam,
+  ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
@@ -31,6 +32,9 @@ import { CreateCollectionDto, CollectionQueryDto } from './dto/collection.dto';
 export class CollectionController {
   constructor(private readonly collectionService: CollectionService) {}
 
+  @ApiResponse({ status: 201, description: 'Collection recorded. amountKobo automatically reduces the customer\'s balanceKobo. Receipt photo required.', schema: { example: { success: true, data: { id: 'coll-id', customerId: 'cust-id', recordedById: 'agent-id', amountKobo: 500000000, paymentMode: 'TRANSFER', receiptUrl: 'https://res.cloudinary.com/dwiouwwom/image/upload/v.../receipt.jpg', depositorName: 'Chukwuemeka Obi', bankName: 'GTBank', collectedAt: '2026-07-29T14:00:00.000Z', note: null, createdAt: '2026-07-29T14:00:00.000Z' }, timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 400, description: 'Validation error or customer not found', schema: { example: { success: false, statusCode: 400, message: 'Customer not found', timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-07-29T12:00:00.000Z' } } })
   @Post()
   @HttpCode(HttpStatus.CREATED)
   @ApiBody({ type: CreateCollectionDto })
@@ -47,6 +51,8 @@ export class CollectionController {
     return this.collectionService.create(dto, user);
   }
 
+  @ApiResponse({ status: 200, description: 'Collection history. Field staff see only their own. Admins see all.', schema: { example: { success: true, data: [{ id: 'coll-id', customerId: 'cust-id', recordedById: 'agent-id', amountKobo: 500000000, paymentMode: 'TRANSFER', receiptUrl: 'https://res.cloudinary.com/dwiouwwom/image/upload/v.../receipt.jpg', depositorName: 'Chukwuemeka Obi', bankName: 'GTBank', collectedAt: '2026-07-29T14:00:00.000Z', note: null, createdAt: '2026-07-29T14:00:00.000Z' }], timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-07-29T12:00:00.000Z' } } })
   @Get()
   @ApiOperation({
     summary: 'List collections',
