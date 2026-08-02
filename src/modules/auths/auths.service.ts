@@ -213,14 +213,14 @@ export class AuthService {
     ]);
   }
 
-  // ─── Roles list (for registration dropdown) ───────────────────────────────
+  //  Roles list (for registration dropdown) 
 
   getAllRoles() {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { getAllRoles } = require('@common/utils/role.utils');
     return getAllRoles();
   }
-  // ── Forgot password ────────────────────────────────────────────────────────
+  //Forgot password
 
   async forgotPassword(email: string): Promise<void> {
     const user = await this.prisma.user.findUnique({
