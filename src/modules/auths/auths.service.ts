@@ -180,7 +180,7 @@ export class AuthService {
     await this.tokenService.revokeToken(rawRefreshToken);
   }
 
-  // ─── Change password ──────────────────────────────────────────────────────
+  //  Change password 
 
   async changePassword(
     userId: string,
