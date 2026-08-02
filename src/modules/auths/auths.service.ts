@@ -165,7 +165,7 @@ export class AuthService {
   }
 
 
-  // ─── Refresh ──────────────────────────────────────────────────────────────
+  //  Refresh
 
   async refresh(rawRefreshToken: string): Promise<AuthTokensResponse> {
     const { accessToken, refreshToken } =
@@ -174,7 +174,7 @@ export class AuthService {
     return { accessToken, refreshToken, expiresIn: jwtCfg.accessExpiry };
   }
 
-  // ─── Logout ───────────────────────────────────────────────────────────────
+  //  Logout 
 
   async logout(rawRefreshToken: string): Promise<void> {
     await this.tokenService.revokeToken(rawRefreshToken);
