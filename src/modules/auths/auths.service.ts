@@ -164,6 +164,7 @@ export class AuthService {
     return { accessToken, refreshToken, expiresIn: jwtCfg.accessExpiry };
   }
 
+
   // ─── Refresh ──────────────────────────────────────────────────────────────
 
   async refresh(rawRefreshToken: string): Promise<AuthTokensResponse> {
@@ -214,9 +215,9 @@ export class AuthService {
 
   // ─── Roles list (for registration dropdown) ───────────────────────────────
 
-  getRoles() {
+  getAllRoles() {
     // eslint-disable-next-line @typescript-eslint/no-var-requires
-    const { getAllRoles } = require('@common/utils/role.util');
+    const { getAllRoles } = require('@common/utils/role.utils');
     return getAllRoles();
   }
   // ── Forgot password ────────────────────────────────────────────────────────

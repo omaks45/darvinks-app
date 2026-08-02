@@ -76,7 +76,7 @@ export class AuthController {
     },
   })
   getRoles() {
-    return this.authService.getRoles();
+    return this.authService.getAllRoles();
   }
 
   // ─── POST /auth/register ───────────────────────────────────────────────────
