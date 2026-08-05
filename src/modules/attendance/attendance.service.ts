@@ -328,6 +328,82 @@ export class AttendanceService {
     return event !== null;
   }
 
+  // ── Today's clock-in/out status ───────────────────────────────────────────
+
+  async getTodayStatus(userId: string) {
+    const startOfDay = new Date();
+    startOfDay.setHours(0, 0, 0, 0);
+
+    const todayEvents = await this.prisma.attendanceEvent.findMany({
+      where: {
+        userId,
+        serverTime: { gte: startOfDay },
+        type: { in: [AttendanceType.CLOCK_IN, AttendanceType.CLOCK_OUT] },
+      },
+      select: {
+        id:         true,
+        type:       true,
+        serverTime: true,
+        deviceTime: true,
+        address:    true,
+        photoUrl:   true,
+        flag:       true,
+        latitude:   true,
+        longitude:  true,
+      },
+      orderBy: { serverTime: 'asc' },
+    });
+
+    const clockIn  = todayEvents.find((e) => e.type === AttendanceType.CLOCK_IN)  ?? null;
+    const clockOut = todayEvents.find((e) => e.type === AttendanceType.CLOCK_OUT) ?? null;
+
+    // Determine current status
+    let status: 'NOT_CLOCKED_IN' | 'CLOCKED_IN' | 'CLOCKED_OUT';
+    if (!clockIn) {
+      status = 'NOT_CLOCKED_IN';
+    } else if (!clockOut) {
+      status = 'CLOCKED_IN';
+    } else {
+      status = 'CLOCKED_OUT';
+    }
+
+    // Duration in minutes if both events exist
+    let durationMinutes: number | null = null;
+    if (clockIn && clockOut) {
+      durationMinutes = Math.round(
+        (new Date(clockOut.serverTime).getTime() - new Date(clockIn.serverTime).getTime()) / 60000,
+      );
+    }
+
+    return {
+      date:            startOfDay.toISOString().slice(0, 10), // YYYY-MM-DD
+      status,
+      clockedInToday:  clockIn !== null,
+      clockedOutToday: clockOut !== null,
+      clockIn:  clockIn  ? {
+        id:         clockIn.id,
+        time:       clockIn.serverTime,
+        deviceTime: clockIn.deviceTime,
+        address:    clockIn.address,
+        photoUrl:   clockIn.photoUrl,
+        flag:       clockIn.flag,
+        latitude:   clockIn.latitude,
+        longitude:  clockIn.longitude,
+      } : null,
+      clockOut: clockOut ? {
+        id:         clockOut.id,
+        time:       clockOut.serverTime,
+        deviceTime: clockOut.deviceTime,
+        address:    clockOut.address,
+        photoUrl:   clockOut.photoUrl,
+        flag:       clockOut.flag,
+        latitude:   clockOut.latitude,
+        longitude:  clockOut.longitude,
+      } : null,
+      durationMinutes,
+    };
+  }
+
   // ─── Private helpers ──────────────────────────────────────────────────────
 
   private async uploadAttendancePhoto(
@@ -338,6 +414,12 @@ export class AttendanceService {
     lat: number,
     lng: number,
   ): Promise<string> {
+    if (!photo || !photo.buffer) {
+      throw new BadRequestException(
+        'A photo is required for attendance. ' +
+        'Send the image as multipart/form-data with field name "photo".',
+      );
+    }
     const watermark = `${deviceTime.toISOString().replace('T', ' ').slice(0, 16)} | ${lat.toFixed(4)},${lng.toFixed(4)}`;
     const result = await this.cloudinary.uploadBuffer(
       photo.buffer,
