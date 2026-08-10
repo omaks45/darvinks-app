@@ -88,12 +88,64 @@ export class PurchaseOrderController {
   @ApiResponse({ status: 403, description: 'Only Sales Head or System Admin can approve', schema: { example: { success: false, statusCode: 403, message: 'Forbidden resource', timestamp: '2026-07-29T12:00:00.000Z' } } })
   @Patch(':id/approve')
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
-  @ApiOperation({ summary: 'Approve a purchase order (Sales Head / Admin)' })
+  @ApiConsumes('multipart/form-data')
+  @ApiBody({
+    description:
+      'Optionally attach the approval receipt at the time of approval. ' +
+      'If attached, the receipt is stored on the PO, a KD ledger entry is created automatically, ' +
+      'and a push notification is sent to the field agent instantly. ' +
+      'The receipt field is optional — you can approve without it and upload later via POST /kd-ledger/by-po/:id/receipt.',
+    schema: {
+      type: 'object',
+      properties: {
+        receipt: {
+          type:        'string',
+          format:      'binary',
+          description: 'Approval receipt image (JPEG, PNG, or PDF) — optional',
+        },
+      },
+    },
+  })
+  @ApiOperation({
+    summary:     'Approve a purchase order — optionally attach approval receipt',
+    description:
+      'Sales Head or System Admin approves the PO. ' +
+      'Attaching the receipt here eliminates the manual WhatsApp routing problem — ' +
+      'the receipt is routed automatically to the exact agent who raised the PO via push notification. ' +
+      'The agent sees the receipt inside the app on their PO detail screen immediately.',
+  })
+  @ApiResponse({
+    status: 200,
+    description:
+      'PO approved. If receipt was attached: approvalReceiptUrl is set, ' +
+      'KD ledger entry is auto-created, push notification sent to the PO creator.',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id:                 '9dd46333-04b5-41a1-b3f9-baed52bf2242',
+          orderRef:           'PO-000001',
+          status:             'APPROVED',
+          qualification:      'QUALIFIED',
+          approvedById:       'sh-id',
+          approvedAt:         '2026-08-10T12:00:00.000Z',
+          approvalReceiptUrl: 'https://res.cloudinary.com/dwiouwwom/image/upload/v.../receipt.jpg',
+          totalKobo:          2223000000,
+        },
+        timestamp: '2026-08-10T12:00:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'KD invoice not uploaded or qualification still PENDING/NOT_QUALIFIED', schema: { example: { success: false, statusCode: 400, message: 'KD invoice must be uploaded before approval', timestamp: '2026-08-10T12:00:00.000Z' } } })
+  @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-08-10T12:00:00.000Z' } } })
+  @ApiResponse({ status: 403, description: 'Only Sales Head or System Admin can approve', schema: { example: { success: false, statusCode: 403, message: 'Forbidden resource', timestamp: '2026-08-10T12:00:00.000Z' } } })
+  @UseInterceptors(FileInterceptor('receipt'))
   approve(
     @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() receipt: Express.Multer.File | undefined,
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.poService.approve(id, user);
+    return this.poService.approve(id, user, receipt);
   }
 
   @ApiResponse({ status: 200, description: 'Order marked as DELIVERED. Sets a 30-day payment deadline from today.', schema: { example: { success: true, data: { id: '9dd46333-04b5-41a1-b3f9-baed52bf2242', orderRef: 'PO-000001', status: 'DELIVERED', deliveredById: 'admin-id', deliveredAt: '2026-07-29T12:00:00.000Z', paymentDeadline: '2026-08-28T12:00:00.000Z', totalKobo: 2223000000, paidKobo: 0 }, timestamp: '2026-07-29T12:00:00.000Z' } } })

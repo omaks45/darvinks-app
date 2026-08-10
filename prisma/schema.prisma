@@ -179,6 +179,33 @@ enum TargetPeriod {
   WEEKLY
 }
 
+enum CustomerType {
+  PRIMARY    // KD — receives from org
+  SECONDARY  // Sells to end market
+}
+
+enum SecondaryCustomerType {
+  SUB_DISTRIBUTOR
+  WHOLESALER
+  RETAILER
+}
+
+enum StockCollectionStatus {
+  DRAFT
+  CONFIRMED
+}
+
+enum SecondaryInvoiceStatus {
+  UNPAID
+  PARTIAL
+  SETTLED
+}
+
+enum LedgerStatus {
+  UNPAID
+  PARTIAL
+  SETTLED
+}
 
 // ═════════════════════════════════════════════════════════════════════════════
 // PHASE 1 — AUTH, USERS, ATTENDANCE
@@ -259,6 +286,8 @@ model User {
   targetsReceived            TargetAssignment[]    @relation("AssignedTo")
   invitesSent                InviteToken[]         @relation("InviteCreatedBy")
   locationTargetsCreated     LocationTarget[]       @relation("LocationTargetCreatedBy")
+  stockCollections           StockCollection[]
+  agentInventory  AgentInventory[]
 
   @@index([tier])
   @@index([role])
@@ -268,6 +297,8 @@ model User {
   @@index([isActive])
   @@index([accountOrigin])
   @@index([reportsToId])
+  secondarySaleInvoices SecondarySaleInvoice[] @relation("SecondarySaleInvoiceSoldBy")
+  kdPayments KdPayment[] @relation("KdPaymentRecorder")
 }
 
 model RefreshToken {
@@ -400,13 +431,16 @@ model Product {
   updatedAt       DateTime        @updatedAt
 
   stockEntries       StockEntry[]
+  agentInventory  AgentInventory[]
   purchaseOrderItems PurchaseOrderItem[]
   secondarySaleItems SecondarySaleItem[]
   stockMovements     StockMovement[]     @relation("ProductStockMovements")
+  stockCollectionItems StockCollectionItem[]
 
   @@unique([name, category])
   @@index([category])
   @@index([isActive])
+  secondarySaleInvoiceItems SecondarySaleInvoiceItem[]
 }
 
 // ═════════════════════════════════════════════════════════════════════════════
@@ -435,8 +469,11 @@ model Customer {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
+  customerType          CustomerType          @default(PRIMARY)
+  secondaryCustomerType SecondaryCustomerType?
   purchaseOrders      PurchaseOrder[]
   collections         Collection[]
+  stockCollections    StockCollection[]      @relation("StockCollectionSource")
   attendanceVisits    AttendanceEvent[]
   outOfRegionRequests OutOfRegionRequest[]
   secondarySales      SecondarySale[]       @relation("SecondarySaleKdAccount")
@@ -445,6 +482,8 @@ model Customer {
   @@index([region])
   @@index([balanceKobo])
   @@index([locationId])
+  secondarySaleInvoices SecondarySaleInvoice[] @relation("SecondarySaleInvoiceCustomer")
+  kdLedgerEntries KdLedgerEntry[] @relation("KdLedger")
 }
 
 model OutOfRegionRequest {
@@ -505,6 +544,43 @@ model StockMovement {
   @@index([purchaseOrderId])
 }
 
+model StockCollection {
+  id            String                @id @default(uuid())
+  collectionRef String                @unique
+  userId        String
+  user          User                  @relation(fields: [userId], references: [id])
+  sourceId      String
+  source        Customer              @relation("StockCollectionSource", fields: [sourceId], references: [id])
+  status        StockCollectionStatus @default(DRAFT)
+  subtotalKobo  BigInt                @default(0)
+  note          String?
+  invoiceUrl    String?
+  submittedAt   DateTime?
+  createdAt     DateTime              @default(now())
+  updatedAt     DateTime              @updatedAt
+  items         StockCollectionItem[]
+
+  @@index([userId])
+  @@index([sourceId])
+  @@index([status])
+  @@index([userId, createdAt])
+}
+
+model StockCollectionItem {
+  id                String          @id @default(uuid())
+  stockCollectionId String
+  stockCollection   StockCollection @relation(fields: [stockCollectionId], references: [id], onDelete: Cascade)
+  productId         String
+  product           Product         @relation(fields: [productId], references: [id])
+  quantityCartons   Int
+  unitPriceKobo     BigInt
+  lineTotalKobo     BigInt
+  createdAt         DateTime        @default(now())
+
+  @@index([stockCollectionId])
+  @@index([productId])
+}
+
 // ═════════════════════════════════════════════════════════════════════════════
 // PHASE 2 — PURCHASE ORDERS
 // ═════════════════════════════════════════════════════════════════════════════
@@ -539,6 +615,7 @@ model PurchaseOrder {
   paymentDeadline   DateTime?
   fullyPaidAt       DateTime?
   note              String?
+  approvalReceiptUrl String?   // Receipt uploaded by approver — routed automatically to PO creator
   createdAt         DateTime             @default(now())
   updatedAt         DateTime             @updatedAt
 
@@ -553,6 +630,7 @@ model PurchaseOrder {
   @@index([createdById])
   @@index([paymentDeadline])
   @@index([createdAt])
+  kdLedgerEntry   KdLedgerEntry?
 }
 
 model PurchaseOrderItem {
@@ -646,6 +724,98 @@ model SecondarySaleItem {
   @@index([productId])
 }
 
+// New: Secondary Sale Invoice (extends existing secondary sale)
+model SecondarySaleInvoice {
+  id          String                 @id @default(uuid())
+  invoiceRef  String                 @unique
+  soldById    String
+  soldBy      User                   @relation("SecondarySaleInvoiceSoldBy", fields: [soldById], references: [id])
+  customerId  String
+  customer    Customer               @relation("SecondarySaleInvoiceCustomer", fields: [customerId], references: [id])
+  totalKobo   BigInt
+  paidKobo    BigInt                 @default(0)
+  balanceKobo BigInt
+  status      SecondaryInvoiceStatus @default(UNPAID)
+  invoiceUrl  String?
+  note        String?
+  items       SecondarySaleInvoiceItem[]
+  payments    SecondaryPayment[]
+  createdAt   DateTime               @default(now())
+  updatedAt   DateTime               @updatedAt
+
+  @@index([soldById])
+  @@index([customerId])
+  @@index([status])
+  @@index([soldById, createdAt])
+}
+
+model SecondarySaleInvoiceItem {
+  id              String               @id @default(uuid())
+  invoiceId       String
+  invoice         SecondarySaleInvoice @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  productId       String
+  product         Product              @relation(fields: [productId], references: [id])
+  quantityCartons Int
+  unitPriceKobo   BigInt
+  lineTotalKobo   BigInt
+  createdAt       DateTime             @default(now())
+
+  @@index([invoiceId])
+  @@index([productId])
+}
+
+// New: Payment against secondary sale invoice
+model SecondaryPayment {
+  id          String                 @id @default(uuid())
+  invoiceId   String
+  invoice     SecondarySaleInvoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
+  recordedBy  String
+  amountKobo  BigInt
+  paymentMode PaymentMode  // CASH | TRANSFER
+  note        String?
+  createdAt   DateTime             @default(now())
+}
+
+
+
+model KdLedgerEntry {
+  id              String        @id @default(uuid())
+  customerId      String
+  customer        Customer      @relation("KdLedger", fields: [customerId], references: [id])
+  purchaseOrderId String        @unique
+  purchaseOrder   PurchaseOrder @relation(fields: [purchaseOrderId], references: [id])
+  receiptUrl      String?
+  totalKobo       BigInt
+  paidKobo        BigInt        @default(0)
+  balanceKobo     BigInt
+  status          LedgerStatus  @default(UNPAID)
+  ocrExtracted    Boolean       @default(false)
+  note            String?
+  payments        KdPayment[]
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([customerId])
+  @@index([status])
+}
+
+model KdPayment {
+  id            String        @id @default(uuid())
+  ledgerEntryId String
+  ledgerEntry   KdLedgerEntry @relation(fields: [ledgerEntryId], references: [id])
+  recordedById  String
+  recordedBy    User          @relation("KdPaymentRecorder", fields: [recordedById], references: [id])
+  amountKobo    BigInt
+  paymentMode   PaymentMode
+  note          String?
+  createdAt     DateTime      @default(now())
+
+  @@index([ledgerEntryId])
+  @@index([recordedById])
+}
+
+
+
 // ═════════════════════════════════════════════════════════════════════════════
 // PHASE 3 — LOCATIONS & TARGETS
 // ═════════════════════════════════════════════════════════════════════════════
@@ -722,6 +892,25 @@ model LocationTarget {
   @@index([locationId])
 }
 
+
+// ── Agent Inventory ───────────────────────────────────────────────────────────
+// Tracks how many cartons of each product a field agent currently holds in hand.
+// Increases when agent submits a StockCollection (collecting from KD).
+// Decreases when agent logs a SecondarySaleInvoice (selling to secondary customer).
+
+model AgentInventory {
+  id              String   @id @default(uuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  productId       String
+  product         Product  @relation(fields: [productId], references: [id])
+  quantityCartons Int      @default(0)
+  updatedAt       DateTime @updatedAt
+
+  @@unique([userId, productId])
+  @@index([userId])
+  @@index([productId])
+}
 // ═════════════════════════════════════════════════════════════════════════════
 // PHASE 3 — COMPETITOR REPORTS
 // ═════════════════════════════════════════════════════════════════════════════

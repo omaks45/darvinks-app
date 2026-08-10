@@ -1,5 +1,4 @@
-// src/modules/dashboard/dashboard.service.ts
-//
+
 // One polymorphic GET /dashboard endpoint — the response shape varies by
 // the caller's tier, but the entry point and query contract are identical
 // for everyone. Each tier branch is a private method so the whole thing
@@ -206,6 +205,11 @@ export class DashboardService {
       recentCompetitorFeed,
       targetsThisYear,
       allUsers,
+      // POs that are APPROVED but have no approval receipt yet —
+      // Admin needs to upload the receipt so field agents can update their KD ledgers
+      posNeedingReceipt,
+      // Collections broken down by tier for the current month
+      collectionsByTier,
     ] = await Promise.all([
       this.prisma.user.count({ where: { isActive: true } }),
       this.prisma.customer.count({ where: { isActive: true } }),
@@ -221,8 +225,7 @@ export class DashboardService {
         },
       }),
       this.prisma.targetAssignment.count({ where: { year } }),
-      // All users — so Admin can take action (deactivate, view, reset password)
-      // directly from the dashboard without a separate GET /admin/users call
+      // All users — Admin can deactivate/reactivate/view any user from here
       this.prisma.user.findMany({
         orderBy: [{ tier: 'asc' }, { fullName: 'asc' }],
         select: {
@@ -244,26 +247,114 @@ export class DashboardService {
           reportsToId:       true,
         },
       }),
+      // POsNeedingReceipt: approved POs where the admin has not yet uploaded
+      // the approval receipt — the field agent is waiting for this to update
+      // their KD ledger. Shown so admin can take immediate action.
+      this.prisma.purchaseOrder.findMany({
+        where: {
+          status:             { in: ['APPROVED', 'PAYMENT_RECEIVED', 'DO_UPLOADED', 'DELIVERED'] },
+          approvalReceiptUrl: null,
+        },
+        select: {
+          id:          true,
+          orderRef:    true,
+          status:      true,
+          totalKobo:   true,
+          approvedAt:  true,
+          customer:    { select: { businessName: true, region: true } },
+          createdBy:   { select: { fullName: true, employeeRef: true, tier: true } },
+          approvedBy:  { select: { fullName: true } },
+        },
+        orderBy: { approvedAt: 'asc' }, // oldest approved first — most urgent
+        take:    50,
+      }),
+      // Collections grouped by tier for the current month
+      // Shows how much cash has been collected across the org per tier
+      this.prisma.collection.groupBy({
+        by:    ['recordedById'],
+        where: {
+          createdAt: {
+            gte: new Date(year, month - 1, 1),
+            lt:  new Date(year, month,     1),
+          },
+        },
+        _sum:   { amountKobo: true },
+        _count: { id: true },
+      }),
     ]);
+
+    // Enrich collections with user tier information
+    const collectorIds = collectionsByTier.map((c: any) => c.recordedById);
+    const collectors   = collectorIds.length > 0
+      ? await this.prisma.user.findMany({
+          where:  { id: { in: collectorIds } },
+          select: { id: true, tier: true, fullName: true, employeeRef: true },
+        })
+      : [];
+
+    const collectorMap = new Map(collectors.map((u: any) => [u.id, u]));
+
+    // Roll up collections by tier
+    const tierCollectionMap = new Map<string, { totalKobo: bigint; count: number }>();
+    for (const row of collectionsByTier as any[]) {
+      const collector = collectorMap.get(row.recordedById);
+      const tier      = collector?.tier ?? 'UNKNOWN';
+      const existing  = tierCollectionMap.get(tier) ?? { totalKobo: BigInt(0), count: 0 };
+      tierCollectionMap.set(tier, {
+        totalKobo: existing.totalKobo + (row._sum.amountKobo ?? BigInt(0)),
+        count:     existing.count + row._count.id,
+      });
+    }
+
+    const collectionSummaryByTier = Array.from(tierCollectionMap.entries())
+      .map(([tier, data]) => ({
+        tier,
+        totalCollectedKobo: data.totalKobo,
+        collectionCount:    data.count,
+      }))
+      .sort((a, b) => a.tier.localeCompare(b.tier));
+
+    const grandTotalCollectedKobo = collectionSummaryByTier.reduce(
+      (sum, row) => sum + row.totalCollectedKobo,
+      BigInt(0),
+    );
 
     return {
       tier: 'TIER5_SYSTEM_ADMIN_OR_TIER6_GM',
       organisationSummary: {
-        totalActiveUsers:     totalUsers,
-        totalActiveCustomers: totalActiveCustomers,
+        totalActiveUsers:        totalUsers,
+        totalActiveCustomers:    totalActiveCustomers,
         targetsAssignedThisYear: targetsThisYear,
       },
       approvalQueue: {
         pendingPurchaseOrderCount:      pendingPOApprovals,
         pendingOutOfRegionRequestCount: pendingOutOfRegionRequests,
       },
+
+      // ── Receipt upload queue ──────────────────────────────────────────────
+      // POs that have been approved but the admin has not yet uploaded the
+      // receipt. Field agents are waiting — upload the receipt so they can
+      // update their KD ledger. Upload via:
+      //   POST /kd-ledger/by-po/:purchaseOrderId/receipt (multipart, field: file)
+      receiptUploadQueue: {
+        count: posNeedingReceipt.length,
+        items: posNeedingReceipt,
+      },
+
+      // ── Collections by tier ───────────────────────────────────────────────
+      // How much cash was collected from KDs this month, broken down by the
+      // tier of the agent who recorded it.
+      collectionsThisMonth: {
+        period:                 `${year}-${String(month).padStart(2, '0')}`,
+        grandTotalKobo:         grandTotalCollectedKobo,
+        byTier:                 collectionSummaryByTier,
+      },
+
       warehouseAlerts: {
         lowStockEntryCount: lowStock.length,
         lowStockEntries:    lowStock.slice(0, 20),
       },
       competitorActivityFeed: recentCompetitorFeed,
-      // Full user list — Admin can deactivate/reactivate/view any user from here
-      // Sorted by tier then name. Use id with PATCH /admin/users/:id/deactivate etc.
       users: allUsers,
     };
   }

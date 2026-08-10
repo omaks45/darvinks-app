@@ -20,10 +20,12 @@ const mockPrisma = {
     findMany: jest.fn(),
   },
   customer:           { count: jest.fn() },
-  purchaseOrder:      { count: jest.fn() },
+  purchaseOrder:      { count: jest.fn(), findMany: jest.fn() },
   outOfRegionRequest: { count: jest.fn() },
   targetAssignment:   { count: jest.fn() },
   competitorReport:   { findMany: jest.fn() },
+  // NEW: powers the "collections by tier" rollup in getAdminDashboard()
+  collection:         { groupBy: jest.fn() },
 };
 
 const mockAttendance       = { hasClockedInToday:  jest.fn() };
@@ -108,6 +110,25 @@ const USER_STUB = {
   reportsToId: null,
 };
 
+// NEW: a purchase order that's been approved but has no receipt uploaded yet
+const PO_NEEDING_RECEIPT = {
+  id:         'po-receipt-id',
+  orderRef:   'PO-000099',
+  status:     'APPROVED',
+  totalKobo:  BigInt(1_000_000),
+  approvedAt: new Date('2026-07-15'),
+  customer:   { businessName: 'Test Pharmacy', region: 'SOUTH_WEST' },
+  createdBy:  { fullName: 'Field Agent', employeeRef: 'Dar-00000010', tier: 'TIER1' },
+  approvedBy: { fullName: 'Sales Head' },
+};
+
+// NEW: raw groupBy row shape returned by prisma.collection.groupBy()
+const COLLECTION_GROUP_ROW = {
+  recordedById: 'user-id',
+  _sum:   { amountKobo: BigInt(500_000) },
+  _count: { id: 3 },
+};
+
 // ─── Requester factories ───────────────────────────────────────────────────────
 
 function makeTier(tier: string, sub = 'user-id'): JwtPayload {
@@ -156,9 +177,11 @@ describe('DashboardService', () => {
     mockPrisma.user.findMany.mockResolvedValue([]);
     mockPrisma.customer.count.mockResolvedValue(3);
     mockPrisma.purchaseOrder.count.mockResolvedValue(0);
+    mockPrisma.purchaseOrder.findMany.mockResolvedValue([]); // NEW: receiptUploadQueue default
     mockPrisma.outOfRegionRequest.count.mockResolvedValue(0);
     mockPrisma.targetAssignment.count.mockResolvedValue(2);
     mockPrisma.competitorReport.findMany.mockResolvedValue([]);
+    mockPrisma.collection.groupBy.mockResolvedValue([]);      // NEW: collectionsThisMonth default
   });
 
   // ── getDashboard() dispatch ────────────────────────────────────────────────
@@ -234,6 +257,21 @@ describe('DashboardService', () => {
       mockAttendance.hasClockedInToday.mockResolvedValue(false);
       const result = await service.getDashboard(makeTier('TIER2'), QUERY) as any;
       expect(result.status.clockedInToday).toBe(false);
+    });
+
+    // NEW: canPerformFieldActivities is derived from clockedInToday for
+    // TIER1–TIER4 (the Sales-Head branch of this OR is unreachable here,
+    // since Sales Head is routed to a different dashboard method entirely).
+    it('canPerformFieldActivities is true when clocked in today', async () => {
+      mockAttendance.hasClockedInToday.mockResolvedValue(true);
+      const result = await service.getDashboard(makeTier('TIER2'), QUERY) as any;
+      expect(result.status.canPerformFieldActivities).toBe(true);
+    });
+
+    it('canPerformFieldActivities is false when not clocked in today', async () => {
+      mockAttendance.hasClockedInToday.mockResolvedValue(false);
+      const result = await service.getDashboard(makeTier('TIER3'), QUERY) as any;
+      expect(result.status.canPerformFieldActivities).toBe(false);
     });
 
     it('includes myPerformance from TargetAssignmentService', async () => {
@@ -470,6 +508,147 @@ describe('DashboardService', () => {
       const adminResult = await service.getDashboard(ADMIN, QUERY) as any;
       expect(gmResult.tier).toBe(adminResult.tier);
       expect(Object.keys(gmResult)).toEqual(Object.keys(adminResult));
+    });
+
+    // ── NEW: receipt upload queue ──────────────────────────────────────────
+    // Approved POs with no approvalReceiptUrl yet — admin needs to act on these.
+
+    describe('receiptUploadQueue', () => {
+      it('includes approved POs that are still missing a receipt', async () => {
+        mockPrisma.purchaseOrder.findMany.mockResolvedValue([PO_NEEDING_RECEIPT]);
+        const result = await service.getDashboard(ADMIN, QUERY) as any;
+        expect(result.receiptUploadQueue.count).toBe(1);
+        expect(result.receiptUploadQueue.items).toEqual([PO_NEEDING_RECEIPT]);
+      });
+
+      it('is empty when every approved PO already has a receipt', async () => {
+        mockPrisma.purchaseOrder.findMany.mockResolvedValue([]);
+        const result = await service.getDashboard(ADMIN, QUERY) as any;
+        expect(result.receiptUploadQueue.count).toBe(0);
+        expect(result.receiptUploadQueue.items).toEqual([]);
+      });
+
+      it('queries only receipt-eligible statuses with a null receipt, oldest first, capped at 50', async () => {
+        await service.getDashboard(ADMIN, QUERY);
+        expect(mockPrisma.purchaseOrder.findMany).toHaveBeenCalledWith(
+          expect.objectContaining({
+            where: expect.objectContaining({
+              status:             { in: ['APPROVED', 'PAYMENT_RECEIVED', 'DO_UPLOADED', 'DELIVERED'] },
+              approvalReceiptUrl: null,
+            }),
+            orderBy: { approvedAt: 'asc' },
+            take:    50,
+          }),
+        );
+      });
+    });
+
+    // ── NEW: collections by tier ───────────────────────────────────────────
+
+    describe('collectionsThisMonth', () => {
+      it('reports the period as a formatted YYYY-MM string from the query', async () => {
+        const result = await service.getDashboard(ADMIN, QUERY) as any;
+        expect(result.collectionsThisMonth.period).toBe('2026-07');
+      });
+
+      it('is empty when there are no collections recorded this month', async () => {
+        mockPrisma.collection.groupBy.mockResolvedValue([]);
+        const result = await service.getDashboard(ADMIN, QUERY) as any;
+        expect(result.collectionsThisMonth.grandTotalKobo).toBe(BigInt(0));
+        expect(result.collectionsThisMonth.byTier).toEqual([]);
+      });
+
+      it('does not look up collectors when there are no collections this month', async () => {
+        mockPrisma.collection.groupBy.mockResolvedValue([]);
+        await service.getDashboard(ADMIN, QUERY);
+        // user.findMany should only fire once here — for the admin "all users" list —
+        // not a second time for an empty collector-id lookup.
+        expect(mockPrisma.user.findMany).toHaveBeenCalledTimes(1);
+      });
+
+      it('sums collected amounts and rolls them up by collector tier', async () => {
+        mockPrisma.collection.groupBy.mockResolvedValue([
+          { recordedById: 'u1', _sum: { amountKobo: BigInt(100_000) }, _count: { id: 1 } },
+          { recordedById: 'u2', _sum: { amountKobo: BigInt(200_000) }, _count: { id: 2 } },
+        ]);
+        mockPrisma.user.findMany
+          .mockResolvedValueOnce([USER_STUB]) // allUsers (Promise.all)
+          .mockResolvedValueOnce([
+            { id: 'u1', tier: 'TIER1', fullName: 'A', employeeRef: 'Dar-1' },
+            { id: 'u2', tier: 'TIER2', fullName: 'B', employeeRef: 'Dar-2' },
+          ]); // collector lookup
+
+        const result = await service.getDashboard(ADMIN, QUERY) as any;
+        const tier1 = result.collectionsThisMonth.byTier.find((t: any) => t.tier === 'TIER1');
+        const tier2 = result.collectionsThisMonth.byTier.find((t: any) => t.tier === 'TIER2');
+        expect(tier1.totalCollectedKobo).toBe(BigInt(100_000));
+        expect(tier1.collectionCount).toBe(1);
+        expect(tier2.totalCollectedKobo).toBe(BigInt(200_000));
+        expect(result.collectionsThisMonth.grandTotalKobo).toBe(BigInt(300_000));
+      });
+
+      it('combines multiple collectors on the same tier into one row', async () => {
+        mockPrisma.collection.groupBy.mockResolvedValue([
+          { recordedById: 'u1', _sum: { amountKobo: BigInt(100_000) }, _count: { id: 1 } },
+          { recordedById: 'u2', _sum: { amountKobo: BigInt(50_000) },  _count: { id: 1 } },
+        ]);
+        mockPrisma.user.findMany
+          .mockResolvedValueOnce([USER_STUB])
+          .mockResolvedValueOnce([
+            { id: 'u1', tier: 'TIER1', fullName: 'A', employeeRef: 'Dar-1' },
+            { id: 'u2', tier: 'TIER1', fullName: 'B', employeeRef: 'Dar-2' },
+          ]);
+
+        const result = await service.getDashboard(ADMIN, QUERY) as any;
+        expect(result.collectionsThisMonth.byTier).toHaveLength(1);
+        const tier1 = result.collectionsThisMonth.byTier[0];
+        expect(tier1.totalCollectedKobo).toBe(BigInt(150_000));
+        expect(tier1.collectionCount).toBe(2);
+      });
+
+      it('groups collections from a collector no longer resolvable under UNKNOWN', async () => {
+        mockPrisma.collection.groupBy.mockResolvedValue([COLLECTION_GROUP_ROW]);
+        mockPrisma.user.findMany
+          .mockResolvedValueOnce([USER_STUB]) // allUsers
+          .mockResolvedValueOnce([]);          // collector lookup finds nobody
+
+        const result = await service.getDashboard(ADMIN, QUERY) as any;
+        const unknown = result.collectionsThisMonth.byTier.find((t: any) => t.tier === 'UNKNOWN');
+        expect(unknown).toBeDefined();
+        expect(unknown.totalCollectedKobo).toBe(BigInt(500_000));
+      });
+
+      it('queries collections within the given month\u2019s date range', async () => {
+        await service.getDashboard(ADMIN, QUERY);
+        expect(mockPrisma.collection.groupBy).toHaveBeenCalledWith(
+          expect.objectContaining({
+            by:    ['recordedById'],
+            where: {
+              createdAt: {
+                gte: new Date(2026, 6, 1),
+                lt:  new Date(2026, 7, 1),
+              },
+            },
+          }),
+        );
+      });
+
+      it('byTier rows are sorted alphabetically by tier name', async () => {
+        mockPrisma.collection.groupBy.mockResolvedValue([
+          { recordedById: 'u2', _sum: { amountKobo: BigInt(1) }, _count: { id: 1 } },
+          { recordedById: 'u1', _sum: { amountKobo: BigInt(1) }, _count: { id: 1 } },
+        ]);
+        mockPrisma.user.findMany
+          .mockResolvedValueOnce([USER_STUB])
+          .mockResolvedValueOnce([
+            { id: 'u2', tier: 'TIER3', fullName: 'B', employeeRef: 'Dar-2' },
+            { id: 'u1', tier: 'TIER1', fullName: 'A', employeeRef: 'Dar-1' },
+          ]);
+
+        const result = await service.getDashboard(ADMIN, QUERY) as any;
+        const tiers = result.collectionsThisMonth.byTier.map((t: any) => t.tier);
+        expect(tiers).toEqual(['TIER1', 'TIER3']);
+      });
     });
   });
 

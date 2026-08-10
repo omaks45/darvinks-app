@@ -14,7 +14,7 @@ export type CloudinaryFolder =
   | 'cheques'
   | 'payments'
   | 'delivery-orders'
-  | 'competitor-reports'
+  | 'receipts'
   | 'competitor-reports'
   | `analytics/${string}`;
 

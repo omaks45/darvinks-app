@@ -31,6 +31,9 @@ import { DashboardModule } from '@modules/dashboard/dashboard.module';
 import { AnalyticsModule } from '@modules/analytics/analytics.module';
 import { LocationTargetModule } from '@modules/location-target/location-target.module';
 import { LocationModule } from '@modules/location/location.module';
+import { KdLedgerModule } from '@modules/kd-ledger/kd-ledger.module';
+import { SecondarySaleInvoiceModule } from '@modules/secondary-sale-invoice/secondary-sale-invoice.module';
+import { StockCollectionModule } from '@modules/stock-collection/stock-collection.module';
 
 // Read REDIS_URL directly from process.env AFTER dotenv.config() has run
 const REDIS_URL = process.env.REDIS_URL;
@@ -91,6 +94,9 @@ function parsedRedisUrl() {
     PurchaseOrderModule,
     CollectionModule,
     SecondarySaleModule,
+    StockCollectionModule,
+    SecondarySaleInvoiceModule,
+    KdLedgerModule,
     TargetAssignmentModule,
     CompetitorReportModule,
     DashboardModule,

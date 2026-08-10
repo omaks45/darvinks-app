@@ -1,4 +1,4 @@
-
+// src/modules/purchase-orders/purchase-order.service.ts
 import {
   BadRequestException,
   ForbiddenException,
@@ -174,7 +174,7 @@ export class PurchaseOrderService {
       select: PO_DETAIL_SELECT,
     });
 
-    this.logger.log(`PO created: ${orderRef} (₦${totalKobo / 100n}) by ${requester.sub}`);
+    this.logger.log(`PO created: ${orderRef} (₦${totalKobo / BigInt(100)}) by ${requester.sub}`);
     return po;
   }
 
@@ -215,7 +215,11 @@ export class PurchaseOrderService {
 
   // ── Status transitions ─────────────────────────────────────────────────────
 
-  async approve(id: string, requester: JwtPayload) {
+  async approve(
+    id:        string,
+    requester: JwtPayload,
+    receiptFile?: Express.Multer.File,
+  ) {
     if (!APPROVER_TIERS.includes(requester.tier as string)) {
       throw new ForbiddenException('Only Sales Head, System Admin or GM can approve orders');
     }
@@ -229,6 +233,7 @@ export class PurchaseOrderService {
         totalKobo:     true,
         paidKobo:      true,
         createdById:   true,
+        customerId:    true,
         qualification: true,
         kdInvoiceUrl:  true,
       },
@@ -253,11 +258,119 @@ export class PurchaseOrderService {
 
     this.assertTransition(po.status, 'APPROVED');
 
-    return this.prisma.purchaseOrder.update({
+    // ── Upload receipt if provided ───────────────────────────────────────────
+    let receiptUrl: string | null = null;
+    if (receiptFile?.buffer) {
+      const resourceType = receiptFile.mimetype === 'application/pdf' ? 'raw' : 'image';
+      const upload = await this.cloudinary.uploadBuffer(
+        receiptFile.buffer,
+        'receipts',
+        {
+          publicId:     `po-${id}-approval-receipt`,
+          resourceType: resourceType as any,
+        },
+      );
+      receiptUrl = upload.secure_url;
+      this.logger.log(`Approval receipt uploaded for PO ${po.orderRef}: ${receiptUrl}`);
+    }
+
+    // ── Approve the PO ───────────────────────────────────────────────────────
+    const approved = await this.prisma.purchaseOrder.update({
       where:  { id },
-      data:   { status: 'APPROVED', approvedById: requester.sub, approvedAt: new Date() },
+      data:   {
+        status:             'APPROVED',
+        approvedById:       requester.sub,
+        approvedAt:         new Date(),
+        ...(receiptUrl ? { approvalReceiptUrl: receiptUrl } : {}),
+      },
       select: PO_LIST_SELECT,
     });
+
+    // ── Auto-create KD ledger entry if receipt was attached ──────────────────
+    if (receiptUrl) {
+      void this.createKdLedgerEntry(id, po.customerId, po.totalKobo, receiptUrl);
+    }
+
+    // ── Push notification to the PO creator ─────────────────────────────────
+    void this.notifyPoCreator(po.createdById, po.orderRef, receiptUrl);
+
+    return approved;
+  }
+
+  // ── Internal: create KD ledger entry after approval ──────────────────────────
+
+  private async createKdLedgerEntry(
+    purchaseOrderId: string,
+    customerId:      string,
+    totalKobo:       bigint,
+    receiptUrl:      string,
+  ): Promise<void> {
+    try {
+      const existing = await this.prisma.kdLedgerEntry.findUnique({
+        where: { purchaseOrderId },
+      });
+      if (existing) return; // already exists — don't duplicate
+
+      await this.prisma.kdLedgerEntry.create({
+        data: {
+          customerId,
+          purchaseOrderId,
+          receiptUrl,
+          totalKobo,
+          balanceKobo: totalKobo,
+          paidKobo:    BigInt(0),
+          status:      'UNPAID',
+        },
+      });
+
+      this.logger.log(`KD ledger entry auto-created for PO ${purchaseOrderId}`);
+    } catch (err: any) {
+      this.logger.error(`Failed to auto-create KD ledger for PO ${purchaseOrderId}: ${err.message}`);
+    }
+  }
+
+  // ── Internal: send push notification to PO creator ───────────────────────────
+
+  private async notifyPoCreator(
+    createdById: string,
+    orderRef:    string,
+    receiptUrl:  string | null,
+  ): Promise<void> {
+    try {
+      const creator = await this.prisma.user.findUnique({
+        where:  { id: createdById },
+        select: { fcmToken: true, fullName: true },
+      });
+
+      if (!creator?.fcmToken) return; // user has no device token registered
+
+      const message = receiptUrl
+        ? `Your ${orderRef} has been approved ✓ — receipt attached. Open the app to view and update your KD ledger.`
+        : `Your ${orderRef} has been approved ✓. Open the app to view the updated status.`;
+
+      // Send via Firebase Admin SDK
+      const admin = require('firebase-admin');
+      await admin.messaging().send({
+        token:        creator.fcmToken,
+        notification: {
+          title: `PO Approved — ${orderRef}`,
+          body:  message,
+        },
+        data: {
+          type:           'PO_APPROVED',
+          purchaseOrderId: '', // passed separately
+          orderRef,
+          hasReceipt:     receiptUrl ? 'true' : 'false',
+        },
+        android: { priority: 'high' },
+        apns:    { payload: { aps: { sound: 'default', badge: 1 } } },
+      });
+
+      this.logger.log(`Push notification sent to ${creator.fullName} for ${orderRef}`);
+    } catch (err: any) {
+      // Never let notification failure break the approval flow
+      this.logger.warn(`Push notification failed for ${orderRef}: ${err.message}`);
+    }
   }
 
   async markDelivered(id: string, requester: JwtPayload) {

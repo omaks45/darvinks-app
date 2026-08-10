@@ -1,4 +1,4 @@
-// src/modules/attendance/attendance.service.ts
+
 import {
   BadRequestException,
   ForbiddenException,
@@ -34,7 +34,7 @@ export class AttendanceService {
     @InjectQueue('notifications') private readonly notifyQueue: Queue,
   ) {}
 
-  // ─── Clock In ─────────────────────────────────────────────────────────────
+  //  Clock In 
 
   async clockIn(
     requester: JwtPayload,
@@ -95,7 +95,7 @@ export class AttendanceService {
     return event;
   }
 
-  // ─── Clock Out ────────────────────────────────────────────────────────────
+  //  Clock Out 
 
   async clockOut(
     requester: JwtPayload,
@@ -156,7 +156,7 @@ export class AttendanceService {
     return event;
   }
 
-  // ─── KD Visit (Tier 1 only) ───────────────────────────────────────────────
+  //  KD Visit (Tier 1 only) ───────────────────────────────────────────────
 
   async recordKdVisit(
     requester: JwtPayload,
@@ -196,7 +196,7 @@ export class AttendanceService {
     });
   }
 
-  // ─── Offline Batch Sync ───────────────────────────────────────────────────
+  //  Offline Batch Sync ───────────────────────────────────────────────────
 
   /**
    * Accepts a batch of offline-queued events from the mobile device.
@@ -273,7 +273,7 @@ export class AttendanceService {
     return { processed, skipped };
   }
 
-  // ─── Query ────────────────────────────────────────────────────────────────
+  //  Query ────────────────────────────────────────────────────────────────
 
   async findEvents(requester: JwtPayload, query: AttendanceQueryDto) {
     const { userId, from, to, type } = query;
@@ -313,14 +313,13 @@ export class AttendanceService {
    * today," not "what date did the agent's phone claim."
    */
   async hasClockedInToday(userId: string): Promise<boolean> {
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    const { gte } = this.dayBoundsUTC(new Date());
 
     const event = await this.prisma.attendanceEvent.findFirst({
       where: {
         userId,
         type:       AttendanceType.CLOCK_IN,
-        serverTime: { gte: startOfDay },
+        serverTime: { gte },
       },
       select: { id: true, serverTime: true },
     });
@@ -328,16 +327,15 @@ export class AttendanceService {
     return event !== null;
   }
 
-  // ── Today's clock-in/out status ───────────────────────────────────────────
+  //  Today's clock-in/out status ───────────────────────────────────────────
 
   async getTodayStatus(userId: string) {
-    const startOfDay = new Date();
-    startOfDay.setHours(0, 0, 0, 0);
+    const { gte: startOfDay, lte: endOfDay } = this.dayBoundsUTC(new Date());
 
     const todayEvents = await this.prisma.attendanceEvent.findMany({
       where: {
         userId,
-        serverTime: { gte: startOfDay },
+        serverTime: { gte: startOfDay, lte: endOfDay },
         type: { in: [AttendanceType.CLOCK_IN, AttendanceType.CLOCK_OUT] },
       },
       select: {
@@ -376,7 +374,7 @@ export class AttendanceService {
     }
 
     return {
-      date:            startOfDay.toISOString().slice(0, 10), // YYYY-MM-DD
+      date:            new Date().toISOString().slice(0, 10), // YYYY-MM-DD UTC
       status,
       clockedInToday:  clockIn !== null,
       clockedOutToday: clockOut !== null,
@@ -404,7 +402,7 @@ export class AttendanceService {
     };
   }
 
-  // ─── Private helpers ──────────────────────────────────────────────────────
+  //  Private helpers 
 
   private async uploadAttendancePhoto(
     photo: Express.Multer.File,
@@ -432,11 +430,22 @@ export class AttendanceService {
     return result.secure_url;
   }
 
-  private dayBounds(date: Date): { gte: Date; lte: Date } {
-    const start = new Date(date);
-    start.setHours(0, 0, 0, 0);
-    const end = new Date(date);
-    end.setHours(23, 59, 59, 999);
+  private dayBoundsUTC(date: Date): { gte: Date; lte: Date } {
+    // Use UTC day boundaries so the check is consistent regardless of where
+    // the server runs. Nigeria is UTC+1 — using local time causes off-by-one
+    // errors at midnight WAT where the server's UTC calendar day differs.
+    const start = new Date(Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate(),
+      0, 0, 0, 0,
+    ));
+    const end = new Date(Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate(),
+      23, 59, 59, 999,
+    ));
     return { gte: start, lte: end };
   }
 
@@ -445,9 +454,12 @@ export class AttendanceService {
     type: AttendanceType,
     deviceTime: Date,
   ): Promise<boolean> {
-    const { gte, lte } = this.dayBounds(deviceTime);
+    // Check against serverTime (what the server recorded) rather than
+    // deviceTime (what the phone claims) — serverTime is the authoritative
+    // signal and cannot be manipulated by the client.
+    const { gte, lte } = this.dayBoundsUTC(new Date());
     const existing = await this.prisma.attendanceEvent.findFirst({
-      where: { userId, type, deviceTime: { gte, lte } },
+      where: { userId, type, serverTime: { gte, lte } },
       select: { id: true },
     });
     return existing !== null;
