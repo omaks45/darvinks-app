@@ -9,19 +9,39 @@ import {
     IsNumber,
     IsOptional,
     IsString,
-    Matches,
-    ValidateIf,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { Region } from '@prisma/client';
 
 export class CreateCustomerDto {
+    @ApiProperty({
+        enum:        ['PRIMARY', 'SECONDARY'],
+        default:     'PRIMARY',
+        description:
+        'PRIMARY = Key Distributor (KD) — the agent collects stock FROM this customer. ' +
+        'SECONDARY = Retailer / end buyer — the agent sells TO this customer. ' +
+        'Stock collection invoices can only be raised against PRIMARY customers. ' +
+        'When SECONDARY, also provide secondaryCustomerType.',
+        example: 'PRIMARY',
+    })
+    @IsEnum(['PRIMARY', 'SECONDARY'])
+    customerType: 'PRIMARY' | 'SECONDARY' = 'PRIMARY';
+
+    @ApiPropertyOptional({
+        enum:        ['SUB_DISTRIBUTOR', 'WHOLESALER', 'RETAILER'],
+        description: 'Required when customerType is SECONDARY. Indicates the type of secondary customer.',
+        example:     'WHOLESALER',
+    })
+    @IsOptional()
+    @IsEnum(['SUB_DISTRIBUTOR', 'WHOLESALER', 'RETAILER'])
+    secondaryCustomerType?: 'SUB_DISTRIBUTOR' | 'WHOLESALER' | 'RETAILER';
+
     @ApiProperty({ example: 'Ore Ofe Distributors Ltd' })
     @IsString()
     @IsNotEmpty()
     businessName: string;
 
-    //Address — manual OR GPS
+    // ── Address — manual OR GPS ───────────────────────────────────────────────
     // Tier 2 must provide GPS coordinates (latitude + longitude) and the
     // server resolves the address from them. All other tiers provide address
     // and state directly as text. Both paths are optional individually but

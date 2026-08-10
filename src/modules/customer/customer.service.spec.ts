@@ -799,4 +799,69 @@ describe('CustomerService', () => {
       ).rejects.toThrow(ForbiddenException);
     });
   });
+
+  // ── create() — customerType and secondaryCustomerType ─────────────────────
+
+  describe('create() — customer type validation', () => {
+    it('creates a PRIMARY customer without secondaryCustomerType', async () => {
+      const dto = { ...GPS_CREATE_DTO, customerType: 'PRIMARY' };
+      await service.create(dto as any, makeFieldAgent('TIER2'));
+      expect(mockPrisma.customer.create).toHaveBeenCalledTimes(1);
+      const data = mockPrisma.customer.create.mock.calls[0][0].data;
+      expect(data.customerType).toBe('PRIMARY');
+      expect(data.secondaryCustomerType).toBeNull();
+    });
+
+    it('creates a SECONDARY WHOLESALER customer with secondaryCustomerType', async () => {
+      const dto = {
+        ...GPS_CREATE_DTO,
+        customerType:          'SECONDARY',
+        secondaryCustomerType: 'WHOLESALER',
+      };
+      await service.create(dto as any, makeFieldAgent('TIER2'));
+      const data = mockPrisma.customer.create.mock.calls[0][0].data;
+      expect(data.customerType).toBe('SECONDARY');
+      expect(data.secondaryCustomerType).toBe('WHOLESALER');
+    });
+
+    it('creates a SECONDARY RETAILER customer', async () => {
+      const dto = {
+        ...GPS_CREATE_DTO,
+        customerType:          'SECONDARY',
+        secondaryCustomerType: 'RETAILER',
+      };
+      await service.create(dto as any, makeFieldAgent('TIER2'));
+      const data = mockPrisma.customer.create.mock.calls[0][0].data;
+      expect(data.secondaryCustomerType).toBe('RETAILER');
+    });
+
+    it('creates a SECONDARY SUB_DISTRIBUTOR customer', async () => {
+      const dto = {
+        ...GPS_CREATE_DTO,
+        customerType:          'SECONDARY',
+        secondaryCustomerType: 'SUB_DISTRIBUTOR',
+      };
+      await service.create(dto as any, makeFieldAgent('TIER2'));
+      const data = mockPrisma.customer.create.mock.calls[0][0].data;
+      expect(data.secondaryCustomerType).toBe('SUB_DISTRIBUTOR');
+    });
+
+    it('throws BadRequestException when SECONDARY customer has no secondaryCustomerType', async () => {
+      const dto = {
+        ...GPS_CREATE_DTO,
+        customerType:          'SECONDARY',
+        secondaryCustomerType: undefined,
+      };
+      await expect(service.create(dto as any, makeFieldAgent('TIER2')))
+        .rejects.toThrow(BadRequestException);
+      expect(mockPrisma.customer.create).not.toHaveBeenCalled();
+    });
+
+    it('stores secondaryCustomerType as null for PRIMARY customers', async () => {
+      const dto = { ...GPS_CREATE_DTO, customerType: 'PRIMARY' };
+      await service.create(dto as any, makeFieldAgent('TIER2'));
+      const data = mockPrisma.customer.create.mock.calls[0][0].data;
+      expect(data.secondaryCustomerType).toBeNull();
+    });
+  });
 });

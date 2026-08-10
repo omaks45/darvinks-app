@@ -1,4 +1,4 @@
-// src/modules/customers/customer.service.ts
+
 import {
   BadRequestException,
   ConflictException,
@@ -20,25 +20,27 @@ import type {
 } from './dto/customer.dto';
 
 const CUSTOMER_SELECT = {
-  id:              true,
-  businessName:    true,
-  address:         true,
-  mobilePhone:     true,
-  whatsApp:        true,
-  email:           true,
-  cacNumber:       true,
-  contactPerson:   true,
-  contactPhone:    true,
-  contactPosition: true,
-  region:          true,
-  state:           true,
-  locationId:      true,
-  location:        { select: { name: true, state: true } },
-  isActive:        true,
-  balanceKobo:     true,
-  ownerId:         true,
-  createdAt:       true,
-  updatedAt:       true,
+  id:                    true,
+  businessName:          true,
+  address:               true,
+  mobilePhone:           true,
+  whatsApp:              true,
+  email:                 true,
+  cacNumber:             true,
+  contactPerson:         true,
+  contactPhone:          true,
+  contactPosition:       true,
+  region:                true,
+  state:                 true,
+  locationId:            true,
+  location:              { select: { name: true, state: true } },
+  customerType:          true,
+  secondaryCustomerType: true,
+  isActive:              true,
+  balanceKobo:           true,
+  ownerId:               true,
+  createdAt:             true,
+  updatedAt:             true,
 } as const;
 
 // Tiers allowed to register customers (field staff Tiers 1–4)
@@ -180,21 +182,31 @@ export class CustomerService {
     }
 
     // ── Step 6: Create ────────────────────────────────────────────────────────
+    // Validate secondaryCustomerType when creating a SECONDARY customer
+    if (dto.customerType === 'SECONDARY' && !dto.secondaryCustomerType) {
+      throw new BadRequestException(
+        'secondaryCustomerType is required when customerType is SECONDARY. ' +
+        'Must be one of: SUB_DISTRIBUTOR, WHOLESALER, RETAILER',
+      );
+    }
+
     const customer = await this.prisma.customer.create({
       data: {
-        businessName:    dto.businessName,
-        address:         resolvedAddress,
-        mobilePhone:     dto.mobilePhone,
-        whatsApp:        dto.whatsApp       ?? null,
-        email:           dto.email          ?? null,
-        cacNumber:       dto.cacNumber      ?? null,
-        contactPerson:   dto.contactPerson,
-        contactPhone:    dto.contactPhone,
-        contactPosition: dto.contactPosition ?? null,
+        businessName:         dto.businessName,
+        address:              resolvedAddress,
+        mobilePhone:          dto.mobilePhone,
+        whatsApp:             dto.whatsApp           ?? null,
+        email:                dto.email              ?? null,
+        cacNumber:            dto.cacNumber          ?? null,
+        contactPerson:        dto.contactPerson,
+        contactPhone:         dto.contactPhone,
+        contactPosition:      dto.contactPosition    ?? null,
         region,
-        state:           resolvedState,
-        locationId:      dto.locationId     ?? null,
-        ownerId:         requester.sub,
+        state:                resolvedState,
+        locationId:           dto.locationId         ?? null,
+        ownerId:              requester.sub,
+        customerType:         dto.customerType       ?? 'PRIMARY',
+        secondaryCustomerType: dto.secondaryCustomerType ?? null,
       },
       select: CUSTOMER_SELECT,
     });
