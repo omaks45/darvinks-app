@@ -299,6 +299,7 @@ model User {
   @@index([reportsToId])
   secondarySaleInvoices SecondarySaleInvoice[] @relation("SecondarySaleInvoiceSoldBy")
   kdPayments KdPayment[] @relation("KdPaymentRecorder")
+  secondaryPayments SecondaryPayment[] @relation("SecondaryPaymentRecorder")
 }
 
 model RefreshToken {
@@ -769,7 +770,8 @@ model SecondaryPayment {
   id          String                 @id @default(uuid())
   invoiceId   String
   invoice     SecondarySaleInvoice   @relation(fields: [invoiceId], references: [id], onDelete: Cascade)
-  recordedBy  String
+  recordedById  String
+  recordedBy   User                 @relation("SecondaryPaymentRecorder", fields: [recordedById], references: [id])
   amountKobo  BigInt
   paymentMode PaymentMode  // CASH | TRANSFER
   note        String?

@@ -374,20 +374,20 @@ export class SecondarySaleInvoiceService {
         doc.moveTo(40, y).lineTo(doc.page.width - 40, y).stroke('#CCCCCC');
         y += 10;
         doc.font('Helvetica-Bold').fontSize(12)
-           .text(
-             `TOTAL AMOUNT DUE: ${ProductService.formatNaira(Number(invoice.totalKobo))}`,
-             40, y, { align: 'right', width: doc.page.width - 80 },
-           );
-        y += 18;
-        doc.font('Helvetica-Oblique').fontSize(9).fillColor('#B40000')
-           .text('Payment due immediately. Outstanding balance attracts follow-up.', 40, y);
+            .text(
+              `TOTAL AMOUNT DUE: ${ProductService.formatNaira(Number(invoice.totalKobo))}`,
+              40, y, { align: 'right', width: doc.page.width - 80 },
+            );
+          y += 18;
+          doc.font('Helvetica-Oblique').fontSize(9).fillColor('#B40000')
+            .text('Payment due immediately. Outstanding balance attracts follow-up.', 40, y);
 
-        // Footer
-        doc.font('Helvetica-Oblique').fontSize(8).fillColor('#888888')
-           .text(
-             'This is a computer-generated invoice from Darvinks Healthcare Ltd.',
-             40, doc.page.height - 50, { align: 'center', width: doc.page.width - 80 },
-           );
+          // Footer
+          doc.font('Helvetica-Oblique').fontSize(8).fillColor('#888888')
+            .text(
+              'This is a computer-generated invoice from Darvinks Healthcare Ltd.',
+              40, doc.page.height - 50, { align: 'center', width: doc.page.width - 80 },
+            );
 
         doc.end();
       });
