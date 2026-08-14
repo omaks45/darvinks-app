@@ -1,37 +1,38 @@
-
+// src/modules/notifications/notifications.processor.ts
 import { Logger, OnModuleInit } from '@nestjs/common';
 import { InjectQueue, Process, Processor } from '@nestjs/bull';
 import { Job, Queue } from 'bull';
 import { IdCardWorker } from './workers/id-card.worker';
 import { MailService } from '@modules/email/email.service';
 import { PrismaService } from '@common/prisma/prisma.service';
+import { PushNotificationService } from './push-notification.service';
 
 interface AttendanceFlagJob {
-  userId: string;
-  eventId: string;
-  type: string;
-  flag: string;
+  userId:   string;
+  eventId:  string;
+  type:     string;
+  flag:     string;
   message?: string;
 }
 
 interface IdCardJob {
-  userId: string;
+  userId:    string;
   roleLabel: string;
 }
 
 interface ProvisioningEmailJob {
-  userId: string;
-  email: string;
-  fullName: string;
-  roleLabel: string;
+  userId:            string;
+  email:             string;
+  fullName:          string;
+  roleLabel:         string;
   temporaryPassword: string;
-  employeeRef: string;
+  employeeRef:       string;
 }
 
 interface PasswordResetEmailJob {
-  userId: string;
-  email: string;
-  fullName: string;
+  userId:            string;
+  email:             string;
+  fullName:          string;
   temporaryPassword: string;
 }
 
@@ -41,8 +42,9 @@ export class NotificationsProcessor implements OnModuleInit {
 
   constructor(
     private readonly idCardWorker: IdCardWorker,
-    private readonly mailService: MailService,
-    private readonly prisma: PrismaService,
+    private readonly mailService:  MailService,
+    private readonly prisma:       PrismaService,
+    private readonly push:         PushNotificationService,
     @InjectQueue('notifications') private readonly queue: Queue,
   ) {
     this.logger.log('NotificationsProcessor ready');
@@ -73,11 +75,12 @@ export class NotificationsProcessor implements OnModuleInit {
 
   @Process('attendance-flag')
   async handleAttendanceFlag(job: Job<AttendanceFlagJob>): Promise<void> {
-    const { userId, type, flag, message } = job.data;
+    const { userId, type, flag } = job.data;
     this.logger.warn(
-      `Attendance flag → user=${userId} | type=${type} | flag=${flag}${message ? ` | ${message}` : ''}`,
+      `Attendance flag → user=${userId} | type=${type} | flag=${flag}`,
     );
-    // Phase 4: send push notification to admin here
+    // Send push notification to the agent if they clocked in late or outside window
+    await this.push.notifyAttendanceFlag({ userId, type, flag });
   }
 
   @Process('generate-id-card')
@@ -89,12 +92,12 @@ export class NotificationsProcessor implements OnModuleInit {
       const user = await this.prisma.user.findUniqueOrThrow({
         where: { id: userId },
         select: {
-          id: true,
-          fullName: true,
-          tier: true,
-          team: true,
-          region: true,
-          employeeRef: true,
+          id:                true,
+          fullName:          true,
+          tier:              true,
+          team:              true,
+          region:            true,
+          employeeRef:       true,
           profilePictureUrl: true,
         },
       });
@@ -102,15 +105,15 @@ export class NotificationsProcessor implements OnModuleInit {
       this.logger.log(`Found user ${user.employeeRef}, generating card...`);
 
       await this.idCardWorker.generate({
-        userId: user.id,
-        fullName: user.fullName,
+        userId:            user.id,
+        fullName:          user.fullName,
         roleLabel,
-        tierLabel: user.tier,
-        team: user.team
+        tierLabel:         user.tier,
+        team:              user.team
           ? user.team.charAt(0) + user.team.slice(1).toLowerCase()
           : null,
-        region: user.region ?? null,
-        employeeRef: user.employeeRef,
+        region:            user.region ?? null,
+        employeeRef:       user.employeeRef,
         profilePictureUrl: user.profilePictureUrl ?? null,
       });
 
