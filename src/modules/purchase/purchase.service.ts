@@ -1,4 +1,4 @@
-// src/modules/purchase-orders/purchase-order.service.ts
+
 import {
   BadRequestException,
   ForbiddenException,
@@ -11,6 +11,7 @@ import { PrismaService } from '@common/prisma/prisma.service';
 import { ProductService } from '@modules/products/products.service';
 import { GoogleVisionService } from '@common/google/google-vision.service';
 import { CloudinaryService, CloudinaryFolder } from '@modules/cloudinary/cloudinary.service';
+import { PushNotificationService } from '@modules/notifications/push-notification.service';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type {
   CreatePurchaseOrderDto,
@@ -99,6 +100,7 @@ export class PurchaseOrderService {
     private readonly productService:  ProductService,
     private readonly vision:          GoogleVisionService,
     private readonly cloudinary:      CloudinaryService,
+    private readonly push:            PushNotificationService,
   ) {}
 
   // ── Create ─────────────────────────────────────────────────────────────────
@@ -292,7 +294,7 @@ export class PurchaseOrderService {
     }
 
     // ── Push notification to the PO creator ─────────────────────────────────
-    void this.notifyPoCreator(po.createdById, po.orderRef, receiptUrl);
+    void this.notifyPoCreator(po.createdById, po.orderRef, id, receiptUrl);
 
     return approved;
   }
@@ -330,43 +332,21 @@ export class PurchaseOrderService {
   }
 
   // ── Internal: send push notification to PO creator ───────────────────────────
+  // Delegates to PushNotificationService instead of building the FCM payload here.
 
   private async notifyPoCreator(
-    createdById: string,
-    orderRef:    string,
-    receiptUrl:  string | null,
+    createdById:     string,
+    orderRef:        string,
+    purchaseOrderId: string,
+    receiptUrl:      string | null,
   ): Promise<void> {
     try {
-      const creator = await this.prisma.user.findUnique({
-        where:  { id: createdById },
-        select: { fcmToken: true, fullName: true },
+      await this.push.notifyPoApproved({
+        createdById,
+        orderRef,
+        purchaseOrderId,
+        hasReceipt: receiptUrl !== null,
       });
-
-      if (!creator?.fcmToken) return; // user has no device token registered
-
-      const message = receiptUrl
-        ? `Your ${orderRef} has been approved ✓ — receipt attached. Open the app to view and update your KD ledger.`
-        : `Your ${orderRef} has been approved ✓. Open the app to view the updated status.`;
-
-      // Send via Firebase Admin SDK
-      const admin = require('firebase-admin');
-      await admin.messaging().send({
-        token:        creator.fcmToken,
-        notification: {
-          title: `PO Approved — ${orderRef}`,
-          body:  message,
-        },
-        data: {
-          type:           'PO_APPROVED',
-          purchaseOrderId: '', // passed separately
-          orderRef,
-          hasReceipt:     receiptUrl ? 'true' : 'false',
-        },
-        android: { priority: 'high' },
-        apns:    { payload: { aps: { sound: 'default', badge: 1 } } },
-      });
-
-      this.logger.log(`Push notification sent to ${creator.fullName} for ${orderRef}`);
     } catch (err: any) {
       // Never let notification failure break the approval flow
       this.logger.warn(`Push notification failed for ${orderRef}: ${err.message}`);

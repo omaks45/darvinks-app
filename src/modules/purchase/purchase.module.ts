@@ -5,9 +5,10 @@ import { PurchaseOrderService } from './purchase.service';
 import { ProductModule } from '@modules/products/products.module';
 import { GoogleModule } from '@common/google/google.module';
 import { CloudinaryModule } from '@modules/cloudinary/cloudinary.module';
+import { NotificationsModule } from '@modules/notifications/notifications.module';
 
 @Module({
-  imports:     [ProductModule, GoogleModule,  CloudinaryModule],
+  imports:     [ProductModule, GoogleModule,  CloudinaryModule,  NotificationsModule],
   controllers: [PurchaseOrderController],
   providers:   [PurchaseOrderService],
   exports:     [PurchaseOrderService],

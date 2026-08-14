@@ -1,4 +1,3 @@
-
 import { Test, TestingModule } from '@nestjs/testing';
 import {
   BadRequestException,
@@ -11,6 +10,7 @@ import { PrismaService } from '@common/prisma/prisma.service';
 import { ProductService } from '@modules/products/products.service';
 import { GoogleVisionService } from '@common/google/google-vision.service';
 import { CloudinaryService } from '@modules/cloudinary/cloudinary.service';
+import { PushNotificationService } from '@modules/notifications/push-notification.service';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
@@ -39,6 +39,12 @@ const mockVision = {
 
 const mockCloudinary = {
   uploadBuffer: jest.fn(),
+};
+
+// The PO service only ever calls notifyPoApproved — mock just that method,
+// matching the real PushNotificationService's public signature.
+const mockPush = {
+  notifyPoApproved: jest.fn(),
 };
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
@@ -140,6 +146,10 @@ function makeAdmin(): JwtPayload {
     tier: 'TIER5_SYSTEM_ADMIN', team: 'RADIANT' } as JwtPayload;
 }
 
+// Flushes the microtask queue so fire-and-forget `void this.notifyPoCreator(...)`
+// calls (and other `void`-called async work) resolve before assertions run.
+const flushMicrotasks = () => new Promise((resolve) => setImmediate(resolve));
+
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
 describe('PurchaseOrderService', () => {
@@ -149,10 +159,11 @@ describe('PurchaseOrderService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         PurchaseOrderService,
-        { provide: PrismaService,       useValue: mockPrisma },
-        { provide: ProductService,      useValue: mockProductService },
-        { provide: GoogleVisionService, useValue: mockVision },
-        { provide: CloudinaryService,   useValue: mockCloudinary },
+        { provide: PrismaService,             useValue: mockPrisma },
+        { provide: ProductService,            useValue: mockProductService },
+        { provide: GoogleVisionService,       useValue: mockVision },
+        { provide: CloudinaryService,         useValue: mockCloudinary },
+        { provide: PushNotificationService,   useValue: mockPush },
       ],
     }).compile();
 
@@ -179,6 +190,7 @@ describe('PurchaseOrderService', () => {
     mockVision.compareInvoiceToPO.mockResolvedValue({
       qualified: true, summary: 'Match', confidence: 0.95, mismatches: [],
     });
+    mockPush.notifyPoApproved.mockResolvedValue(undefined);
   });
 
   // ── create ─────────────────────────────────────────────────────────────────
@@ -432,6 +444,43 @@ describe('PurchaseOrderService', () => {
       await expect(service.approve('po-id', makeSalesHead()))
         .rejects.toThrow(NotFoundException);
     });
+
+    // ── notification behavior (new — covers the PushNotificationService wiring) ──
+
+    it('notifies the PO creator via PushNotificationService after approval', async () => {
+      await service.approve('po-id', makeSalesHead());
+      await flushMicrotasks(); // notifyPoCreator is fire-and-forget (`void`)
+
+      expect(mockPush.notifyPoApproved).toHaveBeenCalledTimes(1);
+      expect(mockPush.notifyPoApproved).toHaveBeenCalledWith({
+        createdById:     APPROVABLE_PO.createdById,
+        orderRef:        APPROVABLE_PO.orderRef,
+        purchaseOrderId: 'po-id',
+        hasReceipt:      false,
+      });
+    });
+
+    it('passes hasReceipt: true when an approval receipt was uploaded', async () => {
+      mockCloudinary.uploadBuffer.mockResolvedValue({
+        secure_url: 'https://res.cloudinary.com/test/receipt.jpg',
+      });
+
+      await service.approve('po-id', makeSalesHead(), MOCK_FILE);
+      await flushMicrotasks();
+
+      expect(mockPush.notifyPoApproved).toHaveBeenCalledWith(
+        expect.objectContaining({ hasReceipt: true }),
+      );
+    });
+
+    it('does not let a notification failure break the approval response', async () => {
+      mockPush.notifyPoApproved.mockRejectedValue(new Error('FCM down'));
+
+      const result = await service.approve('po-id', makeSalesHead());
+      await flushMicrotasks();
+
+      expect(result.status).toBe('APPROVED');
+    });
   });
 
   // ── markDelivered ──────────────────────────────────────────────────────────
@@ -635,7 +684,7 @@ describe('PurchaseOrderService', () => {
       const dto = { documentType: 'kdInvoiceUrl' };
       await service.uploadDocument('po-id', dto as any, MOCK_FILE, makeRequester());
 
-      await new Promise(resolve => setImmediate(resolve));
+      await flushMicrotasks();
       expect(mockVision.compareInvoiceToPO).toHaveBeenCalledTimes(1);
     });
 
@@ -646,7 +695,7 @@ describe('PurchaseOrderService', () => {
       });
       await service.uploadDocument('po-id', dto as any, MOCK_FILE, makeAdmin());
 
-      await new Promise(resolve => setImmediate(resolve));
+      await flushMicrotasks();
       expect(mockVision.compareInvoiceToPO).not.toHaveBeenCalled();
     });
 
