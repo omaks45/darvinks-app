@@ -1,4 +1,4 @@
-
+// src/modules/user/user.service.ts
 import {
   BadRequestException,
   ForbiddenException,
@@ -329,5 +329,32 @@ export class UsersService {
     const idx = cascade.indexOf(tier);
     if (idx === -1 || idx === cascade.length - 1) return null;
     return cascade[idx + 1];
+  }
+
+  // ── FCM token registration ────────────────────────────────────────────────────
+
+  /**
+   * Called by the mobile app after every login to register the device's
+   * FCM push token. Without this, push notifications cannot reach the user.
+   * The token changes when the app is reinstalled, so always call this on login.
+   */
+  async registerFcmToken(userId: string, fcmToken: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data:  { fcmToken },
+    });
+    this.logger.log(`FCM token registered for user ${userId}`);
+  }
+
+  /**
+   * Called when the user logs out — removes the token so push notifications
+   * stop reaching this device after logout.
+   */
+  async unregisterFcmToken(userId: string): Promise<void> {
+    await this.prisma.user.update({
+      where: { id: userId },
+      data:  { fcmToken: null },
+    });
+    this.logger.log(`FCM token cleared for user ${userId}`);
   }
 }

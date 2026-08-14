@@ -1,9 +1,11 @@
-
+// src/modules/user/user.controller.ts
 import {
   Body,
   Controller,
   Delete,
   Get,
+  HttpCode,
+  HttpStatus,
   Param,
   ParseUUIDPipe,
   Patch,
@@ -16,6 +18,7 @@ import {
 import { FileInterceptor } from '@nestjs/platform-express';
 import {
   ApiBearerAuth,
+  ApiBody,
   ApiConsumes,
   ApiOperation,
   ApiParam,
@@ -125,5 +128,81 @@ export class UsersController {
     @CurrentUser() user: JwtPayload,
   ) {
     return this.usersService.removeDirectReport(userId, user);
+  }
+
+  // ── FCM Push Token ────────────────────────────────────────────────────────────
+
+  @Post('me/fcm-token')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('access-token')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: 'Register device FCM token for push notifications',
+    description:
+      'Call this immediately after every login to register the device\'s ' +
+      'Firebase Cloud Messaging token. Without this, the user will not receive ' +
+      'any push notifications (PO approvals, target assignments, etc.). ' +
+      'The token changes when the app is reinstalled — always call this on login. ' +
+      '\n\nFlutter: `FirebaseMessaging.instance.getToken()`' +
+      '\n\nReact Native: `messaging().getToken()`',
+  })
+  @ApiBody({
+    schema: {
+      type: 'object',
+      required: ['fcmToken'],
+      properties: {
+        fcmToken: {
+          type:        'string',
+          description: 'Firebase Cloud Messaging registration token from the device',
+          example:     'cRlN8...:APA91b...',
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'FCM token registered — push notifications will now work on this device',
+    schema: {
+      example: {
+        success:   true,
+        data:      { message: 'Push notifications enabled for this device' },
+        timestamp: '2026-08-11T08:00:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async registerFcmToken(
+    @Body('fcmToken') fcmToken: string,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    await this.usersService.registerFcmToken(user.sub, fcmToken);
+    return { message: 'Push notifications enabled for this device' };
+  }
+
+  @Delete('me/fcm-token')
+  @HttpCode(HttpStatus.OK)
+  @ApiBearerAuth('access-token')
+  @UseGuards(JwtAuthGuard)
+  @ApiOperation({
+    summary: 'Unregister FCM token on logout',
+    description:
+      'Call this when the user logs out to stop push notifications reaching ' +
+      'this device. The app should call this before clearing the auth tokens.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'FCM token cleared — push notifications disabled for this device',
+    schema: {
+      example: {
+        success:   true,
+        data:      { message: 'Push notifications disabled for this device' },
+        timestamp: '2026-08-11T08:00:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  async unregisterFcmToken(@CurrentUser() user: JwtPayload) {
+    await this.usersService.unregisterFcmToken(user.sub);
+    return { message: 'Push notifications disabled for this device' };
   }
 }
