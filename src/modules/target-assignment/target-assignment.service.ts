@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import { UserTier } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
+import { PushNotificationService } from '@modules/notifications/push-notification.service';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type {
   CreateRootTargetDto,
@@ -61,7 +62,10 @@ const ASSIGNMENT_SELECT = {
 export class TargetAssignmentService {
   private readonly logger = new Logger(TargetAssignmentService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly push:   PushNotificationService,
+  ) {}
 
   // ── Create root targets (Sales Head -> Tier4) — bulk by category ──────────
 
@@ -114,6 +118,15 @@ export class TargetAssignmentService {
       `Root targets created for ${assignee.fullName} by Sales Head ${requester.sub}: ` +
       dto.categories.map((c) => `${c.category}=${c.targetCartons}`).join(', '),
     );
+
+    // Notify the assigned ZSM that they have new targets to split
+    void this.push.notifyTargetAssigned({
+      assignedToId:   dto.assignedToId,
+      assignedByName: 'Sales Head',
+      period:         `${dto.month ? `${dto.month}/${dto.year}` : dto.year}`,
+      categories:     dto.categories.map((c) => c.category),
+    });
+
     return assignments;
   }
 
