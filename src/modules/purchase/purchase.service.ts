@@ -1,4 +1,4 @@
-
+// src/modules/purchase-orders/purchase-order.service.ts
 import {
   BadRequestException,
   ForbiddenException,
@@ -10,7 +10,6 @@ import { PurchaseOrderStatus, WarehouseLocation } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { ProductService } from '@modules/products/products.service';
 import { GoogleVisionService } from '@common/google/google-vision.service';
-import { CloudinaryService, CloudinaryFolder } from '@modules/cloudinary/cloudinary.service';
 import { PushNotificationService } from '@modules/notifications/push-notification.service';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type {
@@ -20,6 +19,7 @@ import type {
   QualifyInvoiceDto,
   PurchaseOrderQueryDto,
 } from './dto/purchase.dto';
+import { CloudinaryFolder, CloudinaryService } from '@modules/cloudinary/cloudinary.service';
 
 // ── Role constants ─────────────────────────────────────────────────────────────
 const FIELD_TIERS   = ['TIER1', 'TIER2', 'TIER3', 'TIER4'];
@@ -176,7 +176,7 @@ export class PurchaseOrderService {
       select: PO_DETAIL_SELECT,
     });
 
-    this.logger.log(`PO created: ${orderRef} (₦${totalKobo / BigInt(100)}) by ${requester.sub}`);
+    this.logger.log(`PO created: ${orderRef} (₦${totalKobo / 100n}) by ${requester.sub}`);
     return po;
   }
 
@@ -332,13 +332,12 @@ export class PurchaseOrderService {
   }
 
   // ── Internal: send push notification to PO creator ───────────────────────────
-  // Delegates to PushNotificationService instead of building the FCM payload here.
 
   private async notifyPoCreator(
-    createdById:     string,
-    orderRef:        string,
+    createdById:    string,
+    orderRef:       string,
     purchaseOrderId: string,
-    receiptUrl:      string | null,
+    receiptUrl:     string | null,
   ): Promise<void> {
     try {
       await this.push.notifyPoApproved({
@@ -348,7 +347,6 @@ export class PurchaseOrderService {
         hasReceipt: receiptUrl !== null,
       });
     } catch (err: any) {
-      // Never let notification failure break the approval flow
       this.logger.warn(`Push notification failed for ${orderRef}: ${err.message}`);
     }
   }
@@ -365,16 +363,32 @@ export class PurchaseOrderService {
     const paymentDeadline = new Date();
     paymentDeadline.setDate(paymentDeadline.getDate() + 30);
 
-    return this.prisma.purchaseOrder.update({
-      where: { id },
-      data: {
-        status:          'DELIVERED',
-        deliveredById:   requester.sub,
-        deliveredAt:     new Date(),
-        paymentDeadline,
-      },
-      select: PO_LIST_SELECT,
-    });
+    // Run atomically — mark PO delivered AND increase KD debt in one transaction.
+    // The KD's debt starts the moment they receive the goods.
+    // Collections recorded later will reduce this balance.
+    const [updated] = await this.prisma.$transaction([
+      this.prisma.purchaseOrder.update({
+        where: { id },
+        data: {
+          status:          'DELIVERED',
+          deliveredById:   requester.sub,
+          deliveredAt:     new Date(),
+          paymentDeadline,
+        },
+        select: PO_LIST_SELECT,
+      }),
+      this.prisma.customer.update({
+        where: { id: po.customerId },
+        data:  { balanceKobo: { increment: po.totalKobo } },
+      }),
+    ]);
+
+    this.logger.log(
+      `PO ${po.orderRef} marked delivered — ` +
+      `KD balance increased by ₦${Number(po.totalKobo) / 100}`,
+    );
+
+    return updated;
   }
 
   async cancel(id: string, requester: JwtPayload) {
@@ -389,6 +403,24 @@ export class PurchaseOrderService {
     }
 
     this.assertTransition(po.status, 'CANCELLED');
+
+    // If goods were already delivered, reverse the KD debt that was added at delivery
+    const wasDelivered = ['DELIVERED', 'FULLY_PAID'].includes(po.status);
+
+    if (wasDelivered) {
+      const [updated] = await this.prisma.$transaction([
+        this.prisma.purchaseOrder.update({
+          where:  { id },
+          data:   { status: 'CANCELLED' },
+          select: PO_LIST_SELECT,
+        }),
+        this.prisma.customer.update({
+          where: { id: po.customerId },
+          data:  { balanceKobo: { decrement: po.totalKobo } },
+        }),
+      ]);
+      return updated;
+    }
 
     return this.prisma.purchaseOrder.update({
       where:  { id },
@@ -591,12 +623,13 @@ export class PurchaseOrderService {
     const po = await this.prisma.purchaseOrder.findUnique({
       where:  { id },
       select: {
-        id:         true,
-        orderRef:   true,
-        status:     true,
-        totalKobo:  true,
-        paidKobo:   true,
+        id:          true,
+        orderRef:    true,
+        status:      true,
+        totalKobo:   true,
+        paidKobo:    true,
         createdById: true,
+        customerId:  true,
       },
     });
     if (!po) throw new NotFoundException(`Purchase order ${id} not found`);
