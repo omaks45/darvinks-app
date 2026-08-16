@@ -1,4 +1,4 @@
-
+// src/modules/customers/customer.service.ts
 import {
   BadRequestException,
   ConflictException,
@@ -221,7 +221,7 @@ export class CustomerService {
   // ── Read ───────────────────────────────────────────────────────────────────
 
   async findAll(query: CustomerQueryDto, requester: JwtPayload) {
-    const { region, state, isActive } = query;
+    const { region, state, isActive, customerType, secondaryCustomerType } = query as any;
 
     // Admin tiers see all customers; field staff see only their region
     const regionFilter = ADMIN_TIERS.includes(requester.tier as string)
@@ -231,8 +231,10 @@ export class CustomerService {
     return this.prisma.customer.findMany({
       where: {
         ...(regionFilter !== undefined ? { region: regionFilter as Region } : {}),
-        ...(state      ? { state: state.toLowerCase().trim() } : {}),
-        ...(isActive !== undefined ? { isActive } : {}),
+        ...(state                 ? { state: state.toLowerCase().trim() } : {}),
+        ...(isActive !== undefined ? { isActive }                         : {}),
+        ...(customerType          ? { customerType }                      : {}),
+        ...(secondaryCustomerType ? { secondaryCustomerType }             : {}),
       },
       select:  CUSTOMER_SELECT,
       orderBy: { businessName: 'asc' },

@@ -1,14 +1,16 @@
-
+// src/modules/customers/dto/customer.dto.ts
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import {
-    IsEmail,
-    IsEnum,
-    IsLatitude,
-    IsLongitude,
-    IsNotEmpty,
-    IsNumber,
-    IsOptional,
-    IsString,
+  IsEmail,
+  IsEnum,
+  IsLatitude,
+  IsLongitude,
+  IsNotEmpty,
+  IsNumber,
+  IsOptional,
+  IsString,
+  Matches,
+  ValidateIf,
 } from 'class-validator';
 import { Type } from 'class-transformer';
 import { Region } from '@prisma/client';
@@ -148,6 +150,22 @@ export class CustomerQueryDto {
     @ApiPropertyOptional({ example: true })
     @IsOptional()
     isActive?: boolean;
+
+    @ApiPropertyOptional({
+        enum:        ['PRIMARY', 'SECONDARY'],
+        description: 'Filter by customer type. Used internally by /customers/primary and /customers/secondary endpoints.',
+    })
+    @IsOptional()
+    @IsEnum(['PRIMARY', 'SECONDARY'])
+    customerType?: 'PRIMARY' | 'SECONDARY';
+
+    @ApiPropertyOptional({
+        enum:        ['SUB_DISTRIBUTOR', 'WHOLESALER', 'RETAILER'],
+        description: 'Filter secondary customers by sub-type. Only applies when customerType is SECONDARY.',
+    })
+    @IsOptional()
+    @IsEnum(['SUB_DISTRIBUTOR', 'WHOLESALER', 'RETAILER'])
+    secondaryCustomerType?: 'SUB_DISTRIBUTOR' | 'WHOLESALER' | 'RETAILER';
 }
 
 export class OutOfRegionRequestDto {

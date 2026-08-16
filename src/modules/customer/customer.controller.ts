@@ -59,19 +59,132 @@ export class CustomerController {
     return this.customerService.create(dto, user);
   }
 
-  @ApiResponse({ status: 200, description: 'Customer list. Field staff see only their region. Admins see all.', schema: { example: { success: true, data: [{ id: '1feb91cb-a63c-4ca8-904d-ea7cdadbbaf8', businessName: 'Ore Ofe Distributors Ltd', address: '12 Kolade Street, Ilupeju, Lagos', mobilePhone: '+2348099900001', region: 'SOUTH_WEST', state: 'lagos', isActive: true, balanceKobo: 0, ownerId: 'agent-id', createdAt: '2026-07-25T10:49:41.366Z' }], timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @ApiResponse({ status: 200, description: 'Customer list. Field staff see only their region. Admins see all.', schema: { example: { success: true, data: [{ id: '1feb91cb-a63c-4ca8-904d-ea7cdadbbaf8', businessName: 'Ore Ofe Distributors Ltd', address: '12 Kolade Street, Ilupeju, Lagos', mobilePhone: '+2348099900001', region: 'SOUTH_WEST', state: 'lagos', customerType: 'PRIMARY', secondaryCustomerType: null, isActive: true, balanceKobo: 0, ownerId: 'agent-id', createdAt: '2026-07-25T10:49:41.366Z' }], timestamp: '2026-07-29T12:00:00.000Z' } } })
   @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-07-29T12:00:00.000Z' } } })
   @Get()
   @ApiOperation({
-    summary: 'List customers',
+    summary: 'List ALL customers (Primary + Secondary)',
     description:
-      'Admins see all customers. Field staff see only customers in their region.',
+      'Returns all customers regardless of type. ' +
+      'Field staff see only customers in their region. Admins see all. ' +
+      'Use customerType filter to narrow: ?customerType=PRIMARY or ?customerType=SECONDARY. ' +
+      'For dedicated endpoints per type see GET /customers/primary and GET /customers/secondary.',
   })
   findAll(
     @Query() query: CustomerQueryDto,
     @CurrentUser() user: JwtPayload,
   ) {
     return this.customerService.findAll(query, user);
+  }
+
+  // ── GET /customers/primary ────────────────────────────────────────────────
+  // Must be declared BEFORE @Get(':id') so Express resolves 'primary'
+  // as a route path, not a UUID param
+
+  @Get('primary')
+  @ApiOperation({
+    summary: 'List PRIMARY customers only (Key Distributors)',
+    description:
+      'Returns only PRIMARY customers — the organisation\'s Key Distributors. ' +
+      'These are the customers that agents collect stock FROM and raise purchase orders for. ' +
+      'Use this endpoint for: stock collection source picker, PO customer picker, ' +
+      'cash collection customer picker, KD ledger customer list. ' +
+      'Field staff see only their region. Admins see all.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Primary customers (Key Distributors) only',
+    schema: {
+      example: {
+        success: true,
+        data: [{
+          id:                   '1feb91cb-...',
+          businessName:         'Ore Ofe Distributors Ltd',
+          address:              '12 Kolade Street, Ilupeju, Lagos',
+          mobilePhone:          '+2348099900001',
+          region:               'SOUTH_WEST',
+          state:                'lagos',
+          customerType:         'PRIMARY',
+          secondaryCustomerType: null,
+          isActive:             true,
+          balanceKobo:          0,
+          createdAt:            '2026-07-25T10:49:41.366Z',
+        }],
+        timestamp: '2026-08-15T12:00:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  findPrimary(
+    @Query() query: CustomerQueryDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.customerService.findAll(
+      { ...query, customerType: 'PRIMARY' } as any,
+      user,
+    );
+  }
+
+  // ── GET /customers/secondary ──────────────────────────────────────────────
+
+  @Get('secondary')
+  @ApiOperation({
+    summary: 'List SECONDARY customers only (Sub-Distributors, Wholesalers, Retailers)',
+    description:
+      'Returns only SECONDARY customers — agents sell stock TO these customers. ' +
+      'Use this endpoint for: the secondary customer picker on the "Sell Stock" screen, ' +
+      'the "Make Payment" customer filter, and the secondary sale invoice customer list. ' +
+      'Filter by sub-type with ?secondaryCustomerType=WHOLESALER, ' +
+      '?secondaryCustomerType=RETAILER, or ?secondaryCustomerType=SUB_DISTRIBUTOR. ' +
+      'Field staff see only their region. Admins see all.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Secondary customers only — all sub-types unless filtered',
+    schema: {
+      example: {
+        success: true,
+        data: [
+          {
+            id:                    'cust-sec-1',
+            businessName:          'Bright Wholesalers',
+            address:               'Mushin Market, Lagos',
+            mobilePhone:           '+2348055500001',
+            region:                'SOUTH_WEST',
+            state:                 'lagos',
+            customerType:          'SECONDARY',
+            secondaryCustomerType: 'WHOLESALER',
+            isActive:              true,
+            balanceKobo:           126000000,
+            createdAt:             '2026-08-01T09:00:00.000Z',
+          },
+          {
+            id:                    'cust-sec-2',
+            businessName:          'Mushin Retailers',
+            address:               'Mushin, Lagos',
+            mobilePhone:           '+2348055500002',
+            region:                'SOUTH_WEST',
+            state:                 'lagos',
+            customerType:          'SECONDARY',
+            secondaryCustomerType: 'RETAILER',
+            isActive:              true,
+            balanceKobo:           63000000,
+            createdAt:             '2026-08-02T09:00:00.000Z',
+          },
+        ],
+        timestamp: '2026-08-15T12:00:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Unauthorized' })
+  findSecondary(
+    @Query() query: CustomerQueryDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.customerService.findAll(
+      { ...query, customerType: 'SECONDARY' } as any,
+      user,
+    );
   }
 
   @Get(':id')
