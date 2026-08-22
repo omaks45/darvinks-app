@@ -1,4 +1,4 @@
-
+// src/common/utils/role.util.ts
 // Maps user-facing roles (what the registration UI shows) to internal tiers.
 // This is the single source of truth for the role → tier relationship.
 //
@@ -14,15 +14,17 @@ import { UserTier } from '@prisma/client';
 export enum UserRole {
     MERCHANDISER        = 'MERCHANDISER',
     PROMOTER            = 'PROMOTER',
-    DBSR                = 'DBSR',          // Direct Business Sales Representative
-    VSR                 = 'VSR',           // Van Sales Representative
+    DBSR                = 'DBSR',
+    VSR                 = 'VSR',
     SALES_REPRESENTATIVE = 'SALES_REPRESENTATIVE',
-    SSR                 = 'SSR',           // Senior Sales Representative
-    ATSM                = 'ATSM',          // Assistant Territorial Sales Manager
-    TSM                 = 'TSM',           // Territorial Sales Manager
+    SSR                 = 'SSR',
+    ATSM                = 'ATSM',
+    TSM                 = 'TSM',
     ZONAL_SALES_MANAGER = 'ZONAL_SALES_MANAGER',
     SALES_HEAD          = 'SALES_HEAD',
-    SYSTEM_ADMIN        = 'SYSTEM_ADMIN',
+    SYSTEM_ADMIN        = 'SYSTEM_ADMIN',          // kept for backward compat
+    SALES_SUPPORT = 'SALES_SUPPORT',  // new name for System Admin role
+    FIELD_SUPPORT = 'FIELD_SUPPORT',  // new — field oversight
     WAREHOUSE_ADMIN     = 'WAREHOUSE_ADMIN',
     GENERAL_MANAGER     = 'GENERAL_MANAGER',
 }
@@ -87,9 +89,19 @@ export const ROLE_META: Record<UserRole, RoleMeta> = {
         description: 'Executive oversight with the broadest day-to-day platform access',
     },
     [UserRole.SYSTEM_ADMIN]: {
-        tier: UserTier.TIER5_SYSTEM_ADMIN,
-        label: 'System Administrator',
-        description: 'Operational gatekeeper — approves POs, manages users',
+        tier: UserTier.TIER5_SALES_SUPPORT,
+        label: 'Sales Support Agent',
+        description: 'Approves POs, manages users, uploads product images — operational gatekeeper',
+    },
+    [UserRole.SALES_SUPPORT]: {
+        tier: UserTier.TIER5_SALES_SUPPORT,
+        label: 'Sales Support Agent',
+        description: 'Approves POs, manages users, uploads product images — operational gatekeeper',
+    },
+    [UserRole.FIELD_SUPPORT]: {
+        tier: UserTier.TIER5_FIELD_SUPPORT,
+        label: 'Field Support Agent',
+        description: 'Oversees field agent attendance, KD visits, and customer management across all regions',
     },
     [UserRole.WAREHOUSE_ADMIN]: {
         tier: UserTier.WAREHOUSE_ADMIN,

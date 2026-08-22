@@ -24,7 +24,8 @@ enum UserTier {
   TIER3                // ATSM / TSM
   TIER4                // Zonal Sales Manager
   TIER5_SALES_HEAD
-  TIER5_SYSTEM_ADMIN
+  TIER5_SALES_SUPPORT  // Formerly System Admin — approves POs, manages users, uploads product images
+  TIER5_FIELD_SUPPORT  // New — oversees attendance, KD visits, customers (primary & secondary)
   TIER6_GM
   WAREHOUSE_ADMIN
 }
@@ -45,7 +46,8 @@ enum UserRole {
   ZONAL_SALES_MANAGER
   // Tier 5
   SALES_HEAD
-  SYSTEM_ADMIN
+  SALES_SUPPORT
+  FIELD_SUPPORT
   WAREHOUSE_ADMIN
   // Tier 6
   GENERAL_MANAGER
@@ -428,6 +430,7 @@ model Product {
   unitPriceKobo   BigInt
   cartonPriceKobo BigInt
   isActive        Boolean         @default(true)
+  imageUrl        String?
   createdAt       DateTime        @default(now())
   updatedAt       DateTime        @updatedAt
 
