@@ -116,7 +116,7 @@ function makeTier(tier = 'TIER1'): JwtPayload {
   return { sub: 'agent-id', email: 'agent@test.com', tier, team: 'RADIANT' } as JwtPayload;
 }
 function makeAdmin(): JwtPayload {
-  return { sub: 'admin-id', email: 'admin@test.com', tier: 'TIER5_SYSTEM_ADMIN', team: 'RADIANT' } as JwtPayload;
+  return { sub: 'admin-id', email: 'admin@test.com', tier: 'TIER5_SALES_SUPPORT', team: 'RADIANT' } as JwtPayload;
 }
 function makeSalesHead(): JwtPayload {
   return { sub: 'sh-id', email: 'sh@test.com', tier: 'TIER5_SALES_HEAD', team: 'RADIANT' } as JwtPayload;

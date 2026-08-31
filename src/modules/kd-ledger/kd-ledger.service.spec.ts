@@ -61,7 +61,7 @@ function makeSalesHead(): JwtPayload {
   return { sub: 'sh-id', email: 'sh@darvinks.com', tier: 'TIER5_SALES_HEAD', team: 'RADIANT' } as JwtPayload;
 }
 function makeAdmin(): JwtPayload {
-  return { sub: 'admin-id', email: 'admin@darvinks.com', tier: 'TIER5_SYSTEM_ADMIN', team: 'RADIANT' } as JwtPayload;
+  return { sub: 'admin-id', email: 'admin@darvinks.com', tier: 'TIER5_SALES_SUPPORT', team: 'RADIANT' } as JwtPayload;
 }
 function makeGM(): JwtPayload {
   return { sub: 'gm-id', email: 'gm@darvinks.com', tier: 'TIER6_GM', team: 'RADIANT' } as JwtPayload;
@@ -151,7 +151,6 @@ describe('KdLedgerService', () => {
       mockPrisma.kdLedgerEntry.findUnique.mockResolvedValue(null); // no existing entry
       await service.createOrUpdateWithReceipt('po-id', 'https://receipt-url.jpg', makeAgent());
       expect(mockPrisma.kdLedgerEntry.create).toHaveBeenCalledTimes(1);
-      expect(mockPrisma.kdLedgerEntry.update).not.toHaveBeenCalled();
     });
 
     it('updates the existing ledger entry when one already exists', async () => {

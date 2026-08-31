@@ -10,12 +10,12 @@ export type CloudinaryFolder =
   | 'attendance/kd-visits'
   | 'profiles'
   | 'id-cards'
-  | 'products'
   | 'invoices'
   | 'cheques'
   | 'payments'
   | 'delivery-orders'
   | 'receipts'
+  | 'products'
   | 'competitor-reports'
   | `analytics/${string}`;
 

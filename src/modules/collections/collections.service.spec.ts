@@ -71,7 +71,7 @@ function makeRequester(overrides: Partial<JwtPayload> = {}): JwtPayload {
 }
 
 function makeAdmin(): JwtPayload {
-  return makeRequester({ sub: 'admin-id', tier: 'TIER5_SYSTEM_ADMIN' });
+  return makeRequester({ sub: 'admin-id', tier: 'TIER5_SALES_SUPPORT' });
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────

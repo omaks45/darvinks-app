@@ -11,7 +11,7 @@ import { ProductService } from '@modules/products/products.service';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type { CreateCollectionDto, CollectionQueryDto } from './dto/collection.dto';
 
-const ADMIN_TIERS = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD', 'TIER6_GM', 'WAREHOUSE_ADMIN'];
+const ADMIN_TIERS = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD', 'TIER6_GM', 'WAREHOUSE_ADMIN'];
 
 const COLLECTION_SELECT = {
   id:           true,

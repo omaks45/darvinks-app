@@ -18,12 +18,12 @@ import type {
 // Field tiers only, same as Secondary Sales. Confirmed scope: fire-and-forget
 // submission, no approval workflow — Sales Head/Admin just view a feed.
 // Restricting creation to field tiers also sidesteps a real edge case:
-// JwtPayload.region is undefined for TIER5_SYSTEM_ADMIN/TIER6_GM/
+// JwtPayload.region is undefined for TIER5_SALES_SUPPORT/TIER6_GM/
 // WAREHOUSE_ADMIN (they have no region at all), and a CompetitorReport
 // without a region would be meaningless — better to never let it happen
 // than to handle an undefined region after the fact.
 const FIELD_TIERS = ['TIER1', 'TIER2', 'TIER3', 'TIER4'];
-const VIEWER_TIERS = ['TIER5_SALES_HEAD', 'TIER5_SYSTEM_ADMIN', 'TIER6_GM'];
+const VIEWER_TIERS = ['TIER5_SALES_HEAD', 'TIER5_SALES_SUPPORT', 'TIER6_GM'];
 
 const REPORT_SELECT = {
   id:            true,

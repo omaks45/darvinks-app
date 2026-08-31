@@ -2,7 +2,7 @@
   Warnings:
 
   - The values [SYSTEM_ADMIN] on the enum `UserRole` will be removed. If these variants are still used in the database, this will fail.
-  - The values [TIER5_SYSTEM_ADMIN] on the enum `UserTier` will be removed. If these variants are still used in the database, this will fail.
+  - The values [TIER5_SALES_SUPPORT] on the enum `UserTier` will be removed. If these variants are still used in the database, this will fail.
 
 */
 -- AlterEnum

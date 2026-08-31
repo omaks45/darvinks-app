@@ -157,7 +157,7 @@ export class IdCardWorker {
   private buildTierLabel(tier: string): string {
     const map: Record<string, string> = {
       TIER1: 'Tier 1', TIER2: 'Tier 2', TIER3: 'Tier 3', TIER4: 'Tier 4',
-      TIER5_SALES_HEAD: 'Tier 5', TIER5_SYSTEM_ADMIN: 'Tier 5',
+      TIER5_SALES_HEAD: 'Tier 5', TIER5_SALES_SUPPORT: 'Tier 5',
       TIER5_WAREHOUSE: 'Tier 5', TIER6_GM: 'Tier 6',
     };
     return map[tier] ?? tier;

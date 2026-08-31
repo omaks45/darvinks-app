@@ -8,7 +8,7 @@ UPDATE "InviteToken" SET "_old_role" = role::text WHERE "role" = 'SYSTEM_ADMIN';
 
 -- Set them to a valid value that won't be dropped
 UPDATE "User" SET "role" = 'SALES_HEAD', "tier" = 'TIER5_SALES_HEAD'
-WHERE "role" = 'SYSTEM_ADMIN' OR "tier" = 'TIER5_SYSTEM_ADMIN';
+WHERE "role" = 'SYSTEM_ADMIN' OR "tier" = 'TIER5_SALES_SUPPORT';
 
 UPDATE "InviteToken" SET "role" = 'SALES_HEAD'
 WHERE "role" = 'SYSTEM_ADMIN';

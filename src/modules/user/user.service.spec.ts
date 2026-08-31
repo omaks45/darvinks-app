@@ -136,9 +136,9 @@ describe('UsersService', () => {
   // ── findVisible ────────────────────────────────────────────────────────────
 
   describe('findVisible()', () => {
-    it('TIER5_SYSTEM_ADMIN sees all users with no team filter', async () => {
+    it('TIER5_SALES_SUPPORT sees all users with no team filter', async () => {
       mockPrisma.user.findMany.mockResolvedValue([]);
-      await service.findVisible(makeRequester(UserTier.TIER5_SYSTEM_ADMIN));
+      await service.findVisible(makeRequester(UserTier.TIER5_SALES_SUPPORT));
 
       const call = mockPrisma.user.findMany.mock.calls[0][0];
       expect(call.where).toBeUndefined();
@@ -170,7 +170,7 @@ describe('UsersService', () => {
       expect(call.where.tier.in).toContain(UserTier.TIER2);
       expect(call.where.tier.in).toContain(UserTier.TIER3);
       expect(call.where.tier.in).toContain(UserTier.TIER4);
-      expect(call.where.tier.in).not.toContain(UserTier.TIER5_SYSTEM_ADMIN);
+      expect(call.where.tier.in).not.toContain(UserTier.TIER5_SALES_SUPPORT);
     });
 
     it('TIER2 can only see TIER1 and TIER2 in the same team', async () => {

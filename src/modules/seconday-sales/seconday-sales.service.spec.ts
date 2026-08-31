@@ -79,7 +79,7 @@ function makeRequester(overrides: Partial<JwtPayload> = {}): JwtPayload {
 }
 
 function makeAdmin(): JwtPayload {
-  return makeRequester({ sub: 'admin-id', tier: 'TIER5_SYSTEM_ADMIN' });
+  return makeRequester({ sub: 'admin-id', tier: 'TIER5_SALES_SUPPORT' });
 }
 
 function makeSalesHead(): JwtPayload {
@@ -131,7 +131,7 @@ describe('SecondarySaleService', () => {
       expect(mockPrisma.customer.findUnique).not.toHaveBeenCalled();
     });
 
-    it('throws ForbiddenException for TIER5_SYSTEM_ADMIN', async () => {
+    it('throws ForbiddenException for TIER5_SALES_SUPPORT', async () => {
       await expect(
         service.create(CREATE_DTO, makeAdmin()),
       ).rejects.toThrow(ForbiddenException);
@@ -226,7 +226,7 @@ describe('SecondarySaleService', () => {
       expect(where.userId).toBeUndefined();
     });
 
-    it('TIER5_SYSTEM_ADMIN sees all secondary sales', async () => {
+    it('TIER5_SALES_SUPPORT sees all secondary sales', async () => {
       mockPrisma.secondarySale.findMany.mockResolvedValue([]);
       await service.findAll({}, makeAdmin());
 

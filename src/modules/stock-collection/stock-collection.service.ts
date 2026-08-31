@@ -178,7 +178,7 @@ export class StockCollectionService {
   // ── Find all collections ──────────────────────────────────────────────────────
 
   async findAll(query: StockCollectionQueryDto, requester: JwtPayload) {
-    const isAdmin = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD', 'TIER6_GM'].includes(requester.tier);
+    const isAdmin = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD', 'TIER6_GM'].includes(requester.tier);
 
     return this.prisma.stockCollection.findMany({
       where: {
@@ -207,7 +207,7 @@ export class StockCollectionService {
     });
     if (!collection) throw new NotFoundException('Stock collection not found');
 
-    const isAdmin = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD', 'TIER6_GM'].includes(requester.tier);
+    const isAdmin = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD', 'TIER6_GM'].includes(requester.tier);
     if (!isAdmin && collection.userId !== requester.sub) {
       throw new ForbiddenException('You can only view your own stock collections');
     }

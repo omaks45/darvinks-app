@@ -11,7 +11,7 @@ import type {
   LocationTargetQueryDto,
 } from './dto/location-target.dto';
 
-const WRITE_TIERS = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD'];
+const WRITE_TIERS = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD'];
 
 const TARGET_SELECT = {
   id:          true,

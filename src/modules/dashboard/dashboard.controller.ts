@@ -30,7 +30,7 @@ export class DashboardController {
 
 **TIER5_SALES_HEAD:** approvalQueue (pending POs + OOR requests with counts), myTeam (directReports = Tier4 only for target assignment + allMembers = full downstream tree), competitorActivityFeed, targetsAssignedThisYear
 
-**TIER5_SYSTEM_ADMIN / TIER6_GM:** organisationSummary (totalActiveUsers, totalActiveCustomers, targetsAssignedThisYear), approvalQueue counts, warehouseAlerts (lowStockEntries), competitorActivityFeed, users (full user list with id/tier/isActive for management actions)
+**TIER5_SALES_SUPPORT / TIER6_GM:** organisationSummary (totalActiveUsers, totalActiveCustomers, targetsAssignedThisYear), approvalQueue counts, warehouseAlerts (lowStockEntries), competitorActivityFeed, users (full user list with id/tier/isActive for management actions)
 
 **WAREHOUSE_ADMIN:** stockSummary (totalProductLocationEntries, lowStockCount, lowStockEntries), recentMovements`,
     schema: {

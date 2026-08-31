@@ -1,4 +1,5 @@
-
+// src/modules/dashboard/dashboard.service.ts
+//
 // One polymorphic GET /dashboard endpoint — the response shape varies by
 // the caller's tier, but the entry point and query contract are identical
 // for everyone. Each tier branch is a private method so the whole thing
@@ -75,11 +76,12 @@ export class DashboardService {
       case UserTier.TIER5_SALES_HEAD:
         return this.getSalesHeadDashboard(requester, year, month);
 
-      case UserTier.TIER5_SYSTEM_ADMIN:
+      case UserTier.TIER5_SALES_SUPPORT:
       case UserTier.TIER6_GM:
-        // Confirmed: GM has the same access scope as System Admin —
-        // identical dashboard, not a restricted summary view.
         return this.getAdminDashboard(year, month);
+
+      case UserTier.TIER5_FIELD_SUPPORT:
+        return this.getFieldSupportDashboard(year, month);
 
       case UserTier.WAREHOUSE_ADMIN:
         return this.getWarehouseAdminDashboard();
@@ -104,6 +106,11 @@ export class DashboardService {
     year: number,
     month: number,
   ) {
+    const now         = new Date();
+    const weekStart   = new Date(now);
+    weekStart.setDate(now.getDate() - now.getDay()); // Sunday
+    weekStart.setUTCHours(0, 0, 0, 0);
+
     const [
       clockedInToday,
       myPerformance,
@@ -111,6 +118,11 @@ export class DashboardService {
       recentSecondarySales,
       recentCompetitorReports,
       recentPurchaseOrders,
+      // Analytics — this week
+      weeklyCollections,
+      weeklySecondaryInvoices,
+      newSecondaryCustomersThisWeek,
+      saleItemsRaw,   // invoices with their items — used for both SKU breakdown and daily chart
     ] = await Promise.all([
       this.attendance.hasClockedInToday(requester.sub),
       this.targets.getMyPerformance(requester.sub, year, month),
@@ -118,11 +130,118 @@ export class DashboardService {
       this.secondarySales.findAll({}, requester),
       this.competitorReports.findAll({}, requester),
       this.purchaseOrders.findAll({}, requester),
+
+      // Total cash collected this week
+      this.prisma.collection.aggregate({
+        where: {
+          recordedById: requester.sub,
+          collectedAt:  { gte: weekStart },
+        },
+        _sum: { amountKobo: true },
+      }),
+
+      // Total from secondary sale invoices this week
+      this.prisma.secondarySaleInvoice.aggregate({
+        where: {
+          soldById:  requester.sub,
+          createdAt: { gte: weekStart },
+        },
+        _sum:   { totalKobo: true },
+        _count: { id: true },
+      }),
+
+      // New secondary customers created this week
+      this.prisma.customer.count({
+        where: {
+          ownerId:      requester.sub,
+          customerType: 'SECONDARY',
+          createdAt:    { gte: weekStart },
+        },
+      }),
+
+      // SKU + daily chart: get all sale items for this agent this week
+      // then aggregate in JS — avoids Prisma v7 groupBy circular type errors
+      this.prisma.secondarySaleInvoice.findMany({
+        where:  { soldById: requester.sub, createdAt: { gte: weekStart } },
+        select: {
+          id:    true,
+          items: {
+            select: {
+              productId:       true,
+              quantityCartons: true,
+              lineTotalKobo:   true,
+              createdAt:       true,
+            },
+          },
+        },
+      }),
     ]);
 
-    // Team rollup only has content for TIER2-TIER4 (anyone with direct
-    // reports); a TIER1 has none, and getTeamRollup() returns an empty
-    // structure cleanly rather than needing a special case here.
+    // Flatten all items from all invoices
+    const allSaleItems: Array<{
+      productId:       string;
+      quantityCartons: number;
+      lineTotalKobo:   bigint;
+      createdAt:       Date;
+    }> = (saleItemsRaw as any[]).flatMap((inv: any) => inv.items ?? []);
+
+    // Aggregate SKU breakdown by productId — for donut chart
+    const skuMap = new Map<string, number>();
+    for (const item of allSaleItems) {
+      skuMap.set(item.productId, (skuMap.get(item.productId) ?? 0) + item.quantityCartons);
+    }
+    const productSalesBreakdown = Array.from(skuMap.entries()).map(([productId, qty]) => ({
+      productId,
+      _sum: { quantityCartons: qty },
+    }));
+
+    // Aggregate daily totals for bar chart
+    const dailySalesRaw = allSaleItems;
+
+    // Resolve product names for the SKU breakdown
+    const productIds = productSalesBreakdown.map((p: any) => p.productId);
+    const products   = productIds.length > 0
+      ? await this.prisma.product.findMany({
+          where:  { id: { in: productIds } },
+          select: { id: true, name: true, category: true, imageUrl: true },
+        })
+      : [];
+
+    const productMap = new Map(products.map((p: any) => [p.id, p]));
+
+    // Total SKU cartons sold this week
+    const totalSkuSold = productSalesBreakdown.reduce(
+      (sum: number, p: any) => sum + (p._sum.quantityCartons ?? 0),
+      0,
+    );
+
+    // Total amount received this week (collections + invoice payments)
+    const totalCollectionsKobo    = Number(weeklyCollections._sum.amountKobo ?? 0);
+    const totalInvoiceTotalKobo   = Number(weeklySecondaryInvoices._sum.totalKobo ?? 0);
+    const totalAmountReceivedKobo = totalCollectionsKobo + totalInvoiceTotalKobo;
+
+    // Build daily bar chart data — bucket by day of week
+    const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const dailyTotals: Record<string, number> = { Sun: 0, Mon: 0, Tue: 0, Wed: 0, Thu: 0, Fri: 0, Sat: 0 };
+    for (const row of dailySalesRaw as any[]) {
+      const day = DAYS[new Date(row.createdAt).getDay()];
+      dailyTotals[day] = (dailyTotals[day] ?? 0) + Number(row.lineTotalKobo ?? 0);
+    }
+
+    // SKU breakdown with percentages — for donut chart
+    const skuBreakdown = productSalesBreakdown.map((p: any) => {
+      const product = productMap.get(p.productId);
+      const qty     = p._sum.quantityCartons ?? 0;
+      return {
+        productId:      p.productId,
+        name:           product?.name ?? 'Unknown Product',
+        category:       product?.category ?? null,
+        imageUrl:       product?.imageUrl ?? null,
+        cartonsSOld:    qty,
+        percentOfTotal: totalSkuSold > 0 ? Math.round((qty / totalSkuSold) * 100) : 0,
+      };
+    }).sort((a: any, b: any) => b.cartonsSOld - a.cartonsSOld);
+
     const teamRollup = await this.getTeamRollup(requester, year, month);
 
     return {
@@ -141,6 +260,22 @@ export class DashboardService {
         secondarySales:    recentSecondarySales.slice(0, 10),
         competitorReports: recentCompetitorReports.slice(0, 10),
         purchaseOrders:    recentPurchaseOrders.slice(0, 10),
+      },
+      // ── Analytics (this week) ──────────────────────────────────────────────
+      analytics: {
+        period: 'THIS_WEEK',
+        // Summary cards
+        totalAmountReceivedKobo,
+        totalSkuSold,
+        newSecondaryCustomers:  newSecondaryCustomersThisWeek,
+        targetSummary:          myPerformance, // TGT / ACHV / BAL per category
+        // Bar chart — daily sales value (kobo) for last 7 days
+        salesOverview: DAYS.map((day) => ({
+          day,
+          totalKobo: dailyTotals[day] ?? 0,
+        })),
+        // Donut chart — product breakdown by cartons sold this week
+        productBreakdown: skuBreakdown,
       },
     };
   }
@@ -268,41 +403,30 @@ export class DashboardService {
         orderBy: { approvedAt: 'asc' }, // oldest approved first — most urgent
         take:    50,
       }),
-      // Collections grouped by tier for the current month
-      // Shows how much cash has been collected across the org per tier
-      this.prisma.collection.groupBy({
-        by:    ['recordedById'],
+      // Collections this month — fetch all, aggregate by tier in JS
+      this.prisma.collection.findMany({
         where: {
           createdAt: {
             gte: new Date(year, month - 1, 1),
             lt:  new Date(year, month,     1),
           },
         },
-        _sum:   { amountKobo: true },
-        _count: { id: true },
+        select: {
+          amountKobo:   true,
+          recordedById: true,
+          recordedBy:   { select: { tier: true } },
+        },
       }),
     ]);
 
-    // Enrich collections with user tier information
-    const collectorIds = collectionsByTier.map((c: any) => c.recordedById);
-    const collectors   = collectorIds.length > 0
-      ? await this.prisma.user.findMany({
-          where:  { id: { in: collectorIds } },
-          select: { id: true, tier: true, fullName: true, employeeRef: true },
-        })
-      : [];
-
-    const collectorMap = new Map(collectors.map((u: any) => [u.id, u]));
-
-    // Roll up collections by tier
+    // Roll up collections by tier — tier is embedded via recordedBy relation
     const tierCollectionMap = new Map<string, { totalKobo: bigint; count: number }>();
     for (const row of collectionsByTier as any[]) {
-      const collector = collectorMap.get(row.recordedById);
-      const tier      = collector?.tier ?? 'UNKNOWN';
-      const existing  = tierCollectionMap.get(tier) ?? { totalKobo: BigInt(0), count: 0 };
+      const tier     = row.recordedBy?.tier ?? 'UNKNOWN';
+      const existing = tierCollectionMap.get(tier) ?? { totalKobo: BigInt(0), count: 0 };
       tierCollectionMap.set(tier, {
-        totalKobo: existing.totalKobo + (row._sum.amountKobo ?? BigInt(0)),
-        count:     existing.count + row._count.id,
+        totalKobo: existing.totalKobo + BigInt(row.amountKobo ?? 0),
+        count:     existing.count + 1,
       });
     }
 
@@ -363,6 +487,197 @@ export class DashboardService {
   //
   // Not a sales tier — no Secondary Sales/Target performance concept
   // applies to them at all. Their dashboard is entirely about stock.
+
+  // ── Field Support Agent dashboard ─────────────────────────────────────────
+  // Attendance oversight, KD visit monitoring, customer management (all regions)
+
+  private async getFieldSupportDashboard(year: number, month: number) {
+    const periodStart = new Date(Date.UTC(year, month - 1, 1));
+    const periodEnd   = new Date(Date.UTC(year, month,     1));
+    const todayStart  = new Date(new Date().setUTCHours(0, 0, 0, 0));
+
+    const [
+      clockedInGroupBy,
+      lateCount,
+      outsideWindowCount,
+      kdVisitsTodayCount,
+      totalActiveAgents,
+      primaryCount,
+      secondaryCount,
+      recentFlags,
+      recentKdVisits,
+      allCustomers,
+    ] = await Promise.all([
+
+      // Who clocked in today — distinct userIds, using findMany + JS dedup
+      this.prisma.attendanceEvent.findMany({
+        where:  { type: 'CLOCK_IN', serverTime: { gte: todayStart } },
+        select: { userId: true },
+      }),
+
+      // Late clock-ins today
+      this.prisma.attendanceEvent.count({
+        where: { type: 'CLOCK_IN', flag: 'LATE', serverTime: { gte: todayStart } },
+      }),
+
+      // Outside window today
+      this.prisma.attendanceEvent.count({
+        where: { type: 'CLOCK_IN', flag: 'OUTSIDE_WINDOW', serverTime: { gte: todayStart } },
+      }),
+
+      // KD visits today (all tiers 1–4)
+      this.prisma.attendanceEvent.count({
+        where: { type: 'KD_VISIT', serverTime: { gte: todayStart } },
+      }),
+
+      // Active field agents
+      this.prisma.user.count({
+        where: { isActive: true, tier: { in: ['TIER1', 'TIER2', 'TIER3', 'TIER4'] } },
+      }),
+
+      // Primary customer count
+      this.prisma.customer.count({ where: { customerType: 'PRIMARY', isActive: true } }),
+
+      // Secondary customer count
+      this.prisma.customer.count({ where: { customerType: 'SECONDARY', isActive: true } }),
+
+      // Flagged attendance this month
+      this.prisma.attendanceEvent.findMany({
+        where: {
+          flag:       { in: ['LATE', 'OUTSIDE_WINDOW'] },
+          serverTime: { gte: periodStart, lt: periodEnd },
+        },
+        select: {
+          id:         true,
+          type:       true,
+          flag:       true,
+          serverTime: true,
+          address:    true,
+          latitude:   true,
+          longitude:  true,
+          user: { select: { id: true, fullName: true, employeeRef: true, tier: true, team: true, region: true } },
+        },
+        orderBy: { serverTime: 'desc' },
+        take:    100,
+      }),
+
+      // KD visits this month — includes start and end times
+      // Each KD_VISIT_START and KD_VISIT_END pair represents a full visit
+      this.prisma.attendanceEvent.findMany({
+        where: {
+          type:       { in: ['KD_VISIT', 'KD_VISIT_START', 'KD_VISIT_END'] as any },
+          serverTime: { gte: periodStart, lt: periodEnd },
+        },
+        select: {
+          id:         true,
+          type:       true,
+          serverTime: true,
+          address:    true,
+          latitude:   true,
+          longitude:  true,
+          note:       true,
+          user: { select: { id: true, fullName: true, employeeRef: true, tier: true, team: true, region: true } },
+        },
+        orderBy: { serverTime: 'desc' },
+        take:    200,
+      }),
+
+      // All customers with owner info — who created which customer and type
+      this.prisma.customer.findMany({
+        where:   { isActive: true },
+        select: {
+          id:                    true,
+          businessName:          true,
+          address:               true,
+          region:                true,
+          state:                 true,
+          customerType:          true,
+          secondaryCustomerType: true,
+          balanceKobo:           true,
+          isActive:              true,
+          owner: {
+            select: {
+              id:          true,
+              fullName:    true,
+              employeeRef: true,
+              tier:        true,
+              team:        true,
+              region:      true,
+            },
+          },
+          createdAt: true,
+        },
+        orderBy: [{ region: 'asc' }, { businessName: 'asc' }],
+      }),
+    ]);
+
+    const clockedInCount  = new Set((clockedInGroupBy as any[]).map((e: any) => e.userId)).size;
+    const notClockedIn    = Math.max(0, totalActiveAgents - clockedInCount);
+
+    // Derive breakdowns from allCustomers list — avoids groupBy type errors
+    const countByField = <T extends Record<string, any>>(arr: T[], key: keyof T) => {
+      const map: Record<string, number> = {};
+      for (const item of arr) {
+        const k = String(item[key] ?? 'UNKNOWN');
+        map[k] = (map[k] ?? 0) + 1;
+      }
+      return Object.entries(map).map(([k, count]) => ({ [key as string]: k, count }));
+    };
+
+    const byTeam = Object.entries(
+      (allCustomers as any[]).reduce((acc: Record<string, number>, c: any) => {
+        const t = c.owner?.team ?? 'UNKNOWN';
+        acc[t] = (acc[t] ?? 0) + 1;
+        return acc;
+      }, {}),
+    ).map(([team, count]) => ({ team, count }));
+
+    const byRegion = countByField(allCustomers as any[], 'region');
+    const byState  = countByField(allCustomers as any[], 'state')
+      .sort((a: any, b: any) => b.count - a.count);
+
+    return {
+      tier: 'TIER5_FIELD_SUPPORT',
+
+      // ── Attendance today ──────────────────────────────────────────────────
+      attendanceToday: {
+        totalActiveFieldAgents: totalActiveAgents,
+        clockedIn:              clockedInCount,
+        notClockedIn,
+        late:                   lateCount,
+        outsideWindow:          outsideWindowCount,
+        onTime:                 clockedInCount - lateCount - outsideWindowCount,
+      },
+
+      // ── KD visits today ───────────────────────────────────────────────────
+      kdVisitsToday: kdVisitsTodayCount,
+
+      // ── Flagged attendance this month ─────────────────────────────────────
+      attendanceFlags: {
+        period: `${year}-${String(month).padStart(2, '0')}`,
+        count:  recentFlags.length,
+        items:  recentFlags,
+      },
+
+      // ── KD visit feed this month (start + end pairs) ──────────────────────
+      kdVisitFeed: {
+        period: `${year}-${String(month).padStart(2, '0')}`,
+        count:  recentKdVisits.length,
+        items:  recentKdVisits,
+      },
+
+      // ── Customer overview with ownership ──────────────────────────────────
+      customers: {
+        totalPrimary:   primaryCount,
+        totalSecondary: secondaryCount,
+        total:          primaryCount + secondaryCount,
+        byTeam,
+        byRegion,
+        byState,
+        all:             allCustomers,
+      },
+    };
+  }
 
   private async getWarehouseAdminDashboard() {
     const [allStock, lowStock, recentMovements] = await Promise.all([

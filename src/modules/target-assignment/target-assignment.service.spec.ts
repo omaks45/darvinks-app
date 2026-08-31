@@ -53,7 +53,7 @@ function makeTier2(): JwtPayload {
 }
 
 function makeAdmin(): JwtPayload {
-  return { sub: 'admin-id', email: 'admin@test.com', tier: 'TIER5_SYSTEM_ADMIN', team: 'RADIANT' } as JwtPayload;
+  return { sub: 'admin-id', email: 'admin@test.com', tier: 'TIER5_SALES_SUPPORT', team: 'RADIANT' } as JwtPayload;
 }
 
 const TIER4_USER = {
@@ -180,7 +180,13 @@ describe('TargetAssignmentService', () => {
 
     describe('assignee validation', () => {
       it('throws BadRequestException when assigning to a non-Tier4 user', async () => {
-        mockPrisma.user.findUnique.mockResolvedValue(TIER3_USER); // Tier 3, not Tier 4
+        mockPrisma.user.findUnique.mockResolvedValue({ ...TIER3_USER, isActive: true }); // Tier 3, not Tier 4
+        await expect(service.createRoot(ROOT_DTO as any, makeSalesHead()))
+          .rejects.toThrow(BadRequestException);
+      });
+
+      it('throws BadRequestException when assignee is deactivated', async () => {
+        mockPrisma.user.findUnique.mockResolvedValue({ ...TIER4_USER, isActive: false });
         await expect(service.createRoot(ROOT_DTO as any, makeSalesHead()))
           .rejects.toThrow(BadRequestException);
       });
@@ -329,10 +335,34 @@ describe('TargetAssignmentService', () => {
 
     describe('tier validation', () => {
       it('throws BadRequestException when assigning to wrong tier', async () => {
-        // Tier4 splitting to Tier2 (should only split to Tier3)
-        mockPrisma.user.findUnique
-          .mockResolvedValueOnce({ ...TIER2_USER, id: 'child-1', reportsToId: 'tier4-id', isActive: true })
-          .mockResolvedValueOnce({ ...TIER2_USER, id: 'child-2', reportsToId: 'tier4-id', isActive: true });
+        // resetAllMocks clears both call history AND implementations
+        jest.resetAllMocks();
+
+        mockPrisma.targetAssignment.findUnique.mockResolvedValue({
+          ...PARENT,
+          assignedToId: 'tier4-id',
+        });
+
+        // No existing child targets
+        mockPrisma.targetAssignment.findMany.mockResolvedValue([]);
+
+        // user.findUnique returns TIER2 users — wrong tier (expected TIER3)
+        // Using mockImplementation so every call returns correct user by ID
+        mockPrisma.user.findUnique.mockImplementation(({ where }: any) => {
+          const map: Record<string, any> = {
+            'child-1': { ...TIER2_USER, id: 'child-1', reportsToId: 'tier4-id', isActive: true },
+            'child-2': { ...TIER2_USER, id: 'child-2', reportsToId: 'tier4-id', isActive: true },
+          };
+          return Promise.resolve(map[where.id] ?? null);
+        });
+
+        // $transaction must NOT be reached — assertValidAssignee (in Promise.all
+        // before $transaction) should throw first. Set it to throw if called
+        // so the test fails loudly if validation is incorrectly bypassed.
+        mockPrisma.$transaction.mockRejectedValue(
+          new Error('$transaction should not have been called — validation should have thrown first'),
+        );
+
         await expect(service.split('assign-id', SPLIT_DTO as any, makeTier4()))
           .rejects.toThrow(BadRequestException);
       });

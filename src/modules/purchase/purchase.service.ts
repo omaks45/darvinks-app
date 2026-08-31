@@ -23,8 +23,8 @@ import { CloudinaryFolder, CloudinaryService } from '@modules/cloudinary/cloudin
 
 // ── Role constants ─────────────────────────────────────────────────────────────
 const FIELD_TIERS   = ['TIER1', 'TIER2', 'TIER3', 'TIER4'];
-const APPROVER_TIERS = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD', 'TIER6_GM'];
-const ADMIN_TIERS   = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD', 'TIER6_GM', 'WAREHOUSE_ADMIN'];
+const APPROVER_TIERS = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD', 'TIER6_GM'];
+const ADMIN_TIERS   = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD', 'TIER6_GM', 'WAREHOUSE_ADMIN'];
 
 // ── Status transition map — only allowed next states per current state ─────────
 const ALLOWED_TRANSITIONS: Partial<Record<PurchaseOrderStatus, PurchaseOrderStatus[]>> = {

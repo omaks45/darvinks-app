@@ -52,7 +52,7 @@ const TIER_HIERARCHY: UserTier[] = [
   UserTier.TIER3,
   UserTier.TIER4,
   UserTier.TIER5_SALES_HEAD,
-  UserTier.TIER5_SYSTEM_ADMIN,
+  UserTier.TIER5_SALES_SUPPORT,
   UserTier.TIER6_GM,
 ];
 
@@ -133,7 +133,7 @@ export class UsersService {
   async findVisible(requester: JwtPayload) {
     const adminTiers: UserTier[] = [
       UserTier.TIER5_SALES_HEAD,
-      UserTier.TIER5_SYSTEM_ADMIN,
+      UserTier.TIER5_SALES_SUPPORT,
       UserTier.TIER6_GM,
     ];
 

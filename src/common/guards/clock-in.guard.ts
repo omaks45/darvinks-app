@@ -23,7 +23,7 @@ import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 
 // Tiers that never need to clock in — login is sufficient
 const CLOCK_IN_EXEMPT_TIERS = [
-    'TIER5_SYSTEM_ADMIN',
+    'TIER5_SALES_SUPPORT',
     'TIER6_GM',
     'WAREHOUSE_ADMIN',
 ];

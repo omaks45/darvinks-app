@@ -15,7 +15,7 @@ import type { UpdateLocationDto } from './dto/update-location.dto';
 // Write access: System Admin + Sales Head can create/edit locations
 // Read access: all authenticated users (needed when assigning customers
 // to a location, and when the analytics deck is built per-location)
-const WRITE_TIERS = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD'];
+const WRITE_TIERS = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD'];
 
 const LOCATION_SELECT = {
   id:        true,

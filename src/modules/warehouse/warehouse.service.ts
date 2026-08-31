@@ -17,7 +17,7 @@ import type {
 } from './dto/warehouse.dto';
 
 // Only Warehouse Admin and System Admin manage stock
-const WAREHOUSE_TIERS = ['WAREHOUSE_ADMIN', 'TIER5_SYSTEM_ADMIN'];
+const WAREHOUSE_TIERS = ['WAREHOUSE_ADMIN', 'TIER5_SALES_SUPPORT'];
 
 const STOCK_ENTRY_SELECT = {
   id:                true,
@@ -239,7 +239,7 @@ export class WarehouseService {
     location: WarehouseLocation,
   ): void {
     // System Admin has access to all warehouses
-    if (requester.tier === 'TIER5_SYSTEM_ADMIN') return;
+    if (requester.tier === 'TIER5_SALES_SUPPORT') return;
 
     // Warehouse Admin is scoped to one location — check via the user's
     // warehouseLocation claim which we add to the JWT payload in Phase 1

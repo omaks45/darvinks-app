@@ -296,7 +296,7 @@ export class TargetAssignmentService {
   async findAll(query: TargetAssignmentQueryDto, requester: JwtPayload) {
     const adminTiers: UserTier[] = [
       UserTier.TIER5_SALES_HEAD,
-      UserTier.TIER5_SYSTEM_ADMIN,
+      UserTier.TIER5_SALES_SUPPORT,
       UserTier.TIER6_GM,
     ];
     const isSalesHeadOrAdmin = adminTiers.includes(requester.tier as UserTier);
@@ -332,7 +332,7 @@ export class TargetAssignmentService {
 
     const adminTiers: UserTier[] = [
       UserTier.TIER5_SALES_HEAD,
-      UserTier.TIER5_SYSTEM_ADMIN,
+      UserTier.TIER5_SALES_SUPPORT,
       UserTier.TIER6_GM,
     ];
     const isAdmin = adminTiers.includes(requester.tier as UserTier);

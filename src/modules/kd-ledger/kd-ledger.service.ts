@@ -41,7 +41,7 @@ const LEDGER_SELECT = {
 };
 
 const FIELD_TIERS   = new Set(['TIER2', 'TIER3', 'TIER4']);
-const APPROVER_TIERS = new Set(['TIER5_SALES_HEAD', 'TIER5_SYSTEM_ADMIN']);
+const APPROVER_TIERS = new Set(['TIER5_SALES_HEAD', 'TIER5_SALES_SUPPORT']);
 
 @Injectable()
 export class KdLedgerService {

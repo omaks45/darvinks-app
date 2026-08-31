@@ -1,16 +1,18 @@
 
 import {
   ConflictException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
 } from '@nestjs/common';
 import { ProductCategory } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
+import { CloudinaryService } from '@modules/cloudinary/cloudinary.service';
+import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type { CreateProductDto, UpdateProductDto, ProductQueryDto } from './dto/product.dto';
 
-// Fields returned in all product responses — never exposes internal IDs to
-// endpoints that don't need them
+// Fields returned in all product responses
 const PRODUCT_SELECT = {
   id:              true,
   name:            true,
@@ -19,6 +21,7 @@ const PRODUCT_SELECT = {
   unitPriceKobo:   true,
   cartonPriceKobo: true,
   isActive:        true,
+  imageUrl:        true,
   createdAt:       true,
   updatedAt:       true,
 } as const;
@@ -27,9 +30,12 @@ const PRODUCT_SELECT = {
 export class ProductService {
   private readonly logger = new Logger(ProductService.name);
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma:     PrismaService,
+    private readonly cloudinary: CloudinaryService,
+  ) {}
 
-  //  Create
+  // ── Create ─────────────────────────────────────────────────────────────────
 
   async create(dto: CreateProductDto) {
     // Enforce unique (name, category) at service level for a clear error message
@@ -192,6 +198,31 @@ export class ProductService {
     return qty >= product.packQty
       ? product.cartonPriceKobo
       : product.unitPriceKobo * qty;
+  }
+
+  // ── Upload product image (Sales Support Agent only) ───────────────────────
+
+  async uploadImage(id: string, file: Express.Multer.File, requester: JwtPayload) {
+    if (!['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD'].includes(requester.tier as string)) {
+      throw new ForbiddenException('Only Sales Support Agents can upload product images');
+    }
+
+    await this.assertExists(id);
+
+    const uploadResult = await this.cloudinary.uploadBuffer(
+      file.buffer,
+      'products',
+      {
+        publicId:     `product-${id}`,
+        resourceType: 'image',
+      },
+    );
+
+    return this.prisma.product.update({
+      where:  { id },
+      data:   { imageUrl: uploadResult.secure_url },
+      select: PRODUCT_SELECT,
+    });
   }
 
   // ── Private helpers ────────────────────────────────────────────────────────

@@ -192,7 +192,7 @@ export class SecondarySaleInvoiceService {
     if (!invoice) throw new NotFoundException('Invoice not found');
 
     // Only the agent who made the sale or admins can record payments
-    const isAdmin = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD'].includes(requester.tier);
+    const isAdmin = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD'].includes(requester.tier);
     if (!isAdmin && invoice.soldById !== requester.sub) {
       throw new ForbiddenException('You can only record payments for your own invoices');
     }
@@ -252,7 +252,7 @@ export class SecondarySaleInvoiceService {
   // ── Find all invoices ─────────────────────────────────────────────────────────
 
   async findAll(query: SecondarySaleInvoiceQueryDto, requester: JwtPayload) {
-    const isAdmin = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD', 'TIER6_GM'].includes(requester.tier);
+    const isAdmin = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD', 'TIER6_GM'].includes(requester.tier);
 
     return this.prisma.secondarySaleInvoice.findMany({
       where: {
@@ -281,7 +281,7 @@ export class SecondarySaleInvoiceService {
     });
     if (!invoice) throw new NotFoundException('Invoice not found');
 
-    const isAdmin = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD', 'TIER6_GM'].includes(requester.tier);
+    const isAdmin = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD', 'TIER6_GM'].includes(requester.tier);
     if (!isAdmin && invoice.soldById !== requester.sub) {
       throw new ForbiddenException('You can only view your own invoices');
     }

@@ -15,13 +15,13 @@ import { AnalyticsScheduler } from './jobs/analytics.scheduler';
 
 // PPT: all tiers access the download. Field staff get personal scope,
 // privileged tiers get org-wide scope.
-const ORG_SCOPE_TIERS = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD', 'TIER6_GM'];
+const ORG_SCOPE_TIERS = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD', 'TIER6_GM'];
 
 // Excel: System Admin and Sales Head only. GM confirmed excluded.
 // Rationale: Excel contains full row-level user data that GM does not
 // need — GM's dashboard and the PPT org summary already give them the
 // aggregate picture they need.
-const EXCEL_TIERS = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD'];
+const EXCEL_TIERS = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD'];
 
 type PeriodType = 'weekly' | 'monthly' | 'quarterly' | 'annual';
 
@@ -177,7 +177,7 @@ export class AnalyticsController {
     @Query('periodType') periodType: PeriodType = 'monthly',
     @CurrentUser()       user: JwtPayload,
   ) {
-    if (user.tier !== 'TIER5_SYSTEM_ADMIN') {
+    if (user.tier !== 'TIER5_SALES_SUPPORT') {
       throw new ForbiddenException('Only System Admin can manually trigger reports');
     }
     const resolvedType   = this.normalizePeriodType(periodType);

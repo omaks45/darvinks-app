@@ -39,7 +39,7 @@ import {
 // not a warehouse operations decision. The Warehouse Admin manages stock levels
 // for products that already exist in the catalogue — they should not be able to
 // add new products or change prices unilaterally.
-const ADMIN_TIERS = ['TIER5_SYSTEM_ADMIN'];
+const ADMIN_TIERS = ['TIER5_SALES_SUPPORT'];
 
 @ApiTags('Products')
 @ApiBearerAuth('access-token')

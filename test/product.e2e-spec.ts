@@ -50,7 +50,7 @@ const CREATE_DTO = {
 describe('Products (e2e)', () => {
     let app: INestApplication;
     let prisma: any;
-    let adminToken: string;   // TIER5_SYSTEM_ADMIN
+    let adminToken: string;   // TIER5_SALES_SUPPORT
     let fieldToken: string;   // TIER2 — read-only
 
     beforeAll(async () => {
@@ -69,7 +69,7 @@ describe('Products (e2e)', () => {
             passwordHash:       await bcrypt.hash('AdminPass123!', 10),
             role:               'SYSTEM_ADMIN',
             roleLabel:          'System Administrator',
-            tier:               'TIER5_SYSTEM_ADMIN',
+            tier:               'TIER5_SALES_SUPPORT',
             accountOrigin:      'PROVISIONED',
             mustChangePassword: false,
             isActive:           true,

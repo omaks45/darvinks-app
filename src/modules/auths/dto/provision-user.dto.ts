@@ -1,3 +1,4 @@
+// src/modules/auth/dto/provision-user.dto.ts
 // Used by System Admin to create back-office accounts (Flow B & C).
 // Never exposed on the public registration endpoint.
 
@@ -20,7 +21,8 @@ import { UserRole } from '@common/utils/role.utils';
 // Field staff (Tiers 1–4) always self-register
 export const PROVISIONABLE_ROLES = [
     UserRole.SALES_HEAD,
-    UserRole.SYSTEM_ADMIN,
+    UserRole.SALES_SUPPORT,        // formerly SYSTEM_ADMIN
+    UserRole.FIELD_SUPPORT,        // new field oversight role
     UserRole.WAREHOUSE_ADMIN,
     UserRole.GENERAL_MANAGER,
 ] as const;
@@ -56,7 +58,7 @@ export class ProvisionUserDto {
         enum: Team,
         description:
         'Required only for SALES_HEAD (one per team). ' +
-        'Leave empty for SYSTEM_ADMIN, WAREHOUSE_ADMIN, GENERAL_MANAGER.',
+        'Leave empty for SALES_SUPPORT, FIELD_SUPPORT, WAREHOUSE_ADMIN, GENERAL_MANAGER.',
         example: Team.BRIGHT,
     })
     @ValidateIf((o) => o.role === UserRole.SALES_HEAD)
@@ -83,7 +85,7 @@ export class ProvisionUserDto {
     dateOfBirth?: string;
 }
 
-// Response
+// ─── Response ─────────────────────────────────────────────────────────────────
 
 export class ProvisionUserResponse {
     @ApiProperty() userId!: string;

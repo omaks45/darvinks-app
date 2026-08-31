@@ -89,7 +89,7 @@ const FORBIDDEN_EXAMPLE = {
 @ApiTags('Admin')
 @ApiBearerAuth('access-token')
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles(UserTier.TIER5_SYSTEM_ADMIN)
+@Roles(UserTier.TIER5_SALES_SUPPORT)
 @Controller('admin')
 export class AdminController {
   constructor(private readonly adminService: AdminService) {}

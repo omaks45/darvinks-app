@@ -147,7 +147,7 @@ The platform has 8 distinct user types. Every data access rule, every approval f
 | **TIER3** | ATSM, TSM | All Tier2 + manage Tier2 team + split targets | Self-register |
 | **TIER4** | Zonal Sales Manager | All Tier3 + manage Tier3 team + approve OOR requests | Self-register |
 | **TIER5_SALES_HEAD** | Sales Head | Approve POs, assign root targets, competitor feed, org-wide view | Admin invite |
-| **TIER5_SYSTEM_ADMIN** | System Admin | Full platform access, provision users, manage products | Admin invite |
+| **TIER5_SALES_SUPPORT** | System Admin | Full platform access, provision users, manage products | Admin invite |
 | **TIER6_GM** | General Manager | Read-only org-wide view, download reports | Admin invite |
 | **WAREHOUSE_ADMIN** | Warehouse Admin | Record stock, view movements, warehouse dashboard | Admin invite |
 

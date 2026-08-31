@@ -17,7 +17,7 @@ import type {
 // Field tiers only — confirmed: any of Tier 1-4 may log a secondary sale,
 // not just Tier 1.
 const FIELD_TIERS = ['TIER1', 'TIER2', 'TIER3', 'TIER4'];
-const ADMIN_TIERS  = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD', 'TIER6_GM'];
+const ADMIN_TIERS  = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD', 'TIER6_GM'];
 
 const SALE_SELECT = {
   id:         true,

@@ -94,7 +94,7 @@ function loadDatabaseUrl(): string {
         passwordHash,
         role:               'SYSTEM_ADMIN',
         roleLabel:          'System Administrator',
-        tier:               'TIER5_SYSTEM_ADMIN',
+        tier:               'TIER5_SALES_SUPPORT',
         accountOrigin:      'PROVISIONED',
         mustChangePassword: true,
         team:               null,

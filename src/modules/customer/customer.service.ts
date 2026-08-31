@@ -48,7 +48,8 @@ const FIELD_TIERS = ['TIER1', 'TIER2', 'TIER3', 'TIER4'];
 
 // Tiers with full admin access across all customers
 const ADMIN_TIERS = [
-  'TIER5_SYSTEM_ADMIN',
+  'TIER5_SALES_SUPPORT',
+  'TIER5_FIELD_SUPPORT',
   'TIER5_SALES_HEAD',
   'TIER6_GM',
   'WAREHOUSE_ADMIN',
@@ -223,18 +224,18 @@ export class CustomerService {
   async findAll(query: CustomerQueryDto, requester: JwtPayload) {
     const { region, state, isActive, customerType, secondaryCustomerType } = query as any;
 
-    // Admin tiers see all customers; field staff see only their region
-    const regionFilter = ADMIN_TIERS.includes(requester.tier as string)
-      ? (region ?? undefined)
-      : requester.region ?? undefined;
+    const isAdmin = ADMIN_TIERS.includes(requester.tier as string);
 
     return this.prisma.customer.findMany({
       where: {
-        ...(regionFilter !== undefined ? { region: regionFilter as Region } : {}),
+        // Tier 1–4: only see customers THEY created (ownerId = their own userId)
+        // Admin tiers: see all customers, with optional region filter
+        ...(!isAdmin ? { ownerId: requester.sub } : {}),
+        ...(isAdmin && region ? { region: region as Region } : {}),
         ...(state                 ? { state: state.toLowerCase().trim() } : {}),
-        ...(isActive !== undefined ? { isActive }                         : {}),
-        ...(customerType          ? { customerType }                      : {}),
-        ...(secondaryCustomerType ? { secondaryCustomerType }             : {}),
+        ...(isActive !== undefined ? { isActive }                          : {}),
+        ...(customerType          ? { customerType }                       : {}),
+        ...(secondaryCustomerType ? { secondaryCustomerType }              : {}),
       },
       select:  CUSTOMER_SELECT,
       orderBy: { businessName: 'asc' },
@@ -467,7 +468,7 @@ export class CustomerService {
     requester: JwtPayload,
   ) {
     if (ADMIN_TIERS.includes(requester.tier as string)) return;
-    if (customer.region === requester.region) return;
+    if (customer.ownerId === requester.sub) return;
     throw new ForbiddenException('You do not have access to this customer');
   }
 

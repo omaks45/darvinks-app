@@ -103,7 +103,7 @@ function makeAdmin(): JwtPayload {
   return {
     sub:    'admin-id',
     email:  'admin@darvinks.com',
-    tier:   'TIER5_SYSTEM_ADMIN',
+    tier:   'TIER5_SALES_SUPPORT',
     team:   'RADIANT',
     region: undefined,
   } as JwtPayload;

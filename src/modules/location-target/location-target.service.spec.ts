@@ -45,7 +45,7 @@ const SET_DTO = {
 
 function makeAdmin(): JwtPayload {
   return { sub: 'admin-id', email: 'admin@darvinks.com',
-    tier: 'TIER5_SYSTEM_ADMIN', team: 'RADIANT' } as JwtPayload;
+    tier: 'TIER5_SALES_SUPPORT', team: 'RADIANT' } as JwtPayload;
 }
 function makeSalesHead(): JwtPayload {
   return { sub: 'sh-id', email: 'sh@darvinks.com',

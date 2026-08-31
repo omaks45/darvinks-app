@@ -93,6 +93,13 @@ const PO_RESULT = {
   note:              null,
   createdAt:         new Date(),
   updatedAt:         new Date(),
+  items: [{
+    productId:       'prod-a',
+    quantityCartons: 150,
+    unitPriceKobo:   BigInt(6300000),
+    lineTotalKobo:   BigInt(945000000),
+    product:         { name: 'Visita Lotion 250ml' },
+  }],
 };
 
 const CREATE_DTO = {
@@ -125,7 +132,7 @@ function makeSalesHead(): JwtPayload {
   return { sub: 'sh-id', email: 'sh@test.com', tier: 'TIER5_SALES_HEAD', team: 'RADIANT' } as JwtPayload;
 }
 function makeAdmin(): JwtPayload {
-  return { sub: 'admin-id', email: 'admin@test.com', tier: 'TIER5_SYSTEM_ADMIN', team: 'RADIANT' } as JwtPayload;
+  return { sub: 'admin-id', email: 'admin@test.com', tier: 'TIER5_SALES_SUPPORT', team: 'RADIANT' } as JwtPayload;
 }
 function makeGM(): JwtPayload {
   return { sub: 'gm-id', email: 'gm@test.com', tier: 'TIER6_GM', team: 'RADIANT' } as JwtPayload;

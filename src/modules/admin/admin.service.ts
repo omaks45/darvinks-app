@@ -68,7 +68,7 @@ export class AdminService {
     dto: ProvisionUserDto,
   ): Promise<ProvisionUserResponse> {
     // 1. Only System Admin can provision
-    if (requester.tier !== 'TIER5_SYSTEM_ADMIN') {
+    if (requester.tier !== 'TIER5_SALES_SUPPORT') {
       throw new ForbiddenException(
         'Only the System Administrator can provision back-office accounts',
       );
@@ -378,7 +378,7 @@ export class AdminService {
     requester: JwtPayload,
     dto: CreateInviteDto,
   ) {
-    if (requester.tier !== 'TIER5_SYSTEM_ADMIN') {
+    if (requester.tier !== 'TIER5_SALES_SUPPORT') {
       throw new ForbiddenException('Only System Admins can create invites');
     }
 

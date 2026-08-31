@@ -1,5 +1,5 @@
 UPDATE "User" SET "role" = 'SALES_SUPPORT', "tier" = 'TIER5_SALES_SUPPORT'
-WHERE "role" = 'SYSTEM_ADMIN' OR "tier" = 'TIER5_SYSTEM_ADMIN';
+WHERE "role" = 'SYSTEM_ADMIN' OR "tier" = 'TIER5_SALES_SUPPORT';
 
 UPDATE "InviteToken" SET "role" = 'SALES_SUPPORT'
 WHERE "role" = 'SYSTEM_ADMIN';

@@ -199,7 +199,7 @@ describe('WarehouseService', () => {
     it('System Admin can also record inbound', async () => {
       mockPrisma.product.findUnique.mockResolvedValue(ACTIVE_PRODUCT);
       mockPrisma.$transaction.mockResolvedValue([STOCK_ENTRY, {}]);
-      const sysAdmin = makeWarehouseAdmin({ tier: 'TIER5_SYSTEM_ADMIN' });
+      const sysAdmin = makeWarehouseAdmin({ tier: 'TIER5_SALES_SUPPORT' });
 
       await expect(
         service.recordInbound(INBOUND_DTO, sysAdmin),
