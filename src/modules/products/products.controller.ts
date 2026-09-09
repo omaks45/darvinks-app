@@ -11,7 +11,9 @@ import {
   Patch,
   Post,
   Query,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
@@ -25,6 +27,8 @@ import { ProductCategory } from '@prisma/client';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { ApiConsumes } from '@nestjs/swagger';
 import { ProductService } from './products.service';
 import {
   CreateProductDto,
@@ -39,7 +43,7 @@ import {
 // not a warehouse operations decision. The Warehouse Admin manages stock levels
 // for products that already exist in the catalogue — they should not be able to
 // add new products or change prices unilaterally.
-const ADMIN_TIERS = ['TIER5_SALES_SUPPORT'];
+const ADMIN_TIERS = ['TIER5_SYSTEM_ADMIN'];
 
 @ApiTags('Products')
 @ApiBearerAuth('access-token')
@@ -140,6 +144,67 @@ export class ProductController {
   @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
   findById(@Param('id', ParseUUIDPipe) id: string) {
     return this.productService.findById(id);
+  }
+
+  // ── Upload product image (Sales Support Agent only) ───────────────────────
+
+  @Patch(':id/image')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @UseInterceptors(FileInterceptor('image'))
+  @ApiConsumes('multipart/form-data')
+  @ApiOperation({
+    summary: 'Upload product image (Sales Support Agent only)',
+    description:
+      'Uploads a product image to Cloudinary and saves the URL on the product record. ' +
+      'The image is displayed in all product pickers across the field app — ' +
+      'PO creation, stock collection, and secondary sale screens. ' +
+      'Only TIER5_SALES_SUPPORT and TIER5_SALES_HEAD can call this endpoint.',
+  })
+  @ApiParam({ name: 'id', type: 'string', format: 'uuid', description: 'Product ID' })
+  @ApiBody({
+    schema: {
+      type:       'object',
+      required:   ['image'],
+      properties: {
+        image: {
+          type:        'string',
+          format:      'binary',
+          description: 'Product image file (JPG, PNG, WebP). Recommended size: 800×800px.',
+        },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Image uploaded and saved — all field pickers will now show this image',
+    schema: {
+      example: {
+        success:   true,
+        data: {
+          id:              'prod-id',
+          name:            'Visita Essence B Whitening Lotion 250ml',
+          category:        'LOTION',
+          imageUrl:        'https://res.cloudinary.com/darvinks/image/upload/products/product-prod-id.jpg',
+          cartonPriceKobo: 6300000,
+          isActive:        true,
+        },
+        timestamp: '2026-08-22T12:00:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'No image file provided' })
+  @ApiResponse({ status: 403, description: 'Only Sales Support Agents can upload product images' })
+  @ApiResponse({ status: 404, description: 'Product not found' })
+  uploadImage(
+    @Param('id', ParseUUIDPipe) id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    if (!file) {
+      throw new ForbiddenException('No image file provided. Send as multipart/form-data with field name "image"');
+    }
+    return this.productService.uploadImage(id, file, user);
   }
 
   // ── Private ────────────────────────────────────────────────────────────────
