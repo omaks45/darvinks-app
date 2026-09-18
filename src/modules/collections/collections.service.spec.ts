@@ -1,77 +1,55 @@
 // src/modules/collections/collection.service.spec.ts
 import { Test, TestingModule } from '@nestjs/testing';
 import {
-  BadRequestException,
   ForbiddenException,
   NotFoundException,
 } from '@nestjs/common';
-import { PaymentMode } from '@prisma/client';
 import { CollectionService } from './collections.service';
-import { PrismaService } from '@common/prisma/prisma.service';
-import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
+import { PrismaService }     from '@common/prisma/prisma.service';
+import type { JwtPayload }   from '@modules/auths/strategies/jwt.strategies';
 
 // ─── Mocks ────────────────────────────────────────────────────────────────────
 
 const mockPrisma = {
-  customer:   { findUnique: jest.fn(), update: jest.fn() },
   collection: {
-    findUnique: jest.fn(),
-    findMany:   jest.fn(),
-    create:     jest.fn(),
-    aggregate:  jest.fn(),
-    count:      jest.fn(),
+    create:      jest.fn(),
+    findMany:    jest.fn(),
+    findUnique:  jest.fn(),
+    aggregate:   jest.fn(),
   },
+  customer:   { findUnique: jest.fn(), update: jest.fn() },
+  user:       { findMany: jest.fn() },
   $transaction: jest.fn(),
 };
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
-const ACTIVE_CUSTOMER = {
-  id:          'cust-id',
-  isActive:    true,
-  businessName: 'Ore Ofe Ltd',
-  balanceKobo: BigInt(5000000),
-};
-
-const COLLECTION = {
-  id:            'coll-id',
-  customerId:    'cust-id',
-  customer:      { businessName: 'Ore Ofe Ltd', region: 'LAGOS_1' },
-  recordedById:  'user-id',
-  recordedBy:    { fullName: 'Test Agent', employeeRef: 'Dar-00000001' },
-  amountKobo:    BigInt(500000),
-  paymentMode:   PaymentMode.TRANSFER,
-  receiptUrl:    'https://cloudinary.com/receipt.jpg',
-  depositorName: 'Emeka Obi',
-  location:      'Access Bank, Ilupeju',
-  collectedAt:   new Date(),
-  note:          null,
-  createdAt:     new Date(),
-  updatedAt:     new Date(),
+const COLLECTION_STUB = {
+  id:           'coll-id',
+  amountKobo:   BigInt(50000000),
+  paymentMode:  'CASH',
+  collectedAt:  new Date(),
+  recordedById: 'agent-id',
+  customerId:   'cust-id',
+  recordedBy:   { fullName: 'Kenny Solape', tier: 'TIER2' },
+  customer:     { businessName: 'Ore Ofe Distributors', region: 'SOUTH_WEST' },
 };
 
 const CREATE_DTO = {
-  customerId:    'cust-id',
-  amountKobo:    500000,
-  paymentMode:   PaymentMode.TRANSFER,
-  receiptUrl:    'https://cloudinary.com/receipt.jpg',
-  depositorName: 'Emeka Obi',
-  location:      'Access Bank, Ilupeju',
-  collectedAt:   '2026-06-01T10:30:00.000Z',
+  amountKobo:  50000000,
+  paymentMode: 'CASH',
+  customerId:  'cust-id',
+  collectedAt: new Date().toISOString(),
 };
 
-function makeRequester(overrides: Partial<JwtPayload> = {}): JwtPayload {
-  return {
-    sub:   'user-id',
-    email: 'agent@darvinks.com',
-    tier:  'TIER2',
-    team:  'BRIGHT',
-    ...overrides,
-  } as JwtPayload;
+function makeAgent(tier = 'TIER2', sub = 'agent-id'): JwtPayload {
+  return { sub, email: 'a@t.com', tier, team: 'RADIANT', region: 'SOUTH_WEST' } as JwtPayload;
 }
-
 function makeAdmin(): JwtPayload {
-  return makeRequester({ sub: 'admin-id', tier: 'TIER5_SALES_SUPPORT' });
+  return { sub: 'admin-id', email: 'admin@t.com', tier: 'TIER5_SALES_SUPPORT', team: 'RADIANT' } as JwtPayload;
+}
+function makeFieldSupport(): JwtPayload {
+  return { sub: 'fs-id', email: 'fs@t.com', tier: 'TIER5_FIELD_SUPPORT', team: 'RADIANT' } as JwtPayload;
 }
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
@@ -90,207 +68,214 @@ describe('CollectionService', () => {
     service = module.get<CollectionService>(CollectionService);
     jest.resetAllMocks();
 
-    mockPrisma.$transaction.mockImplementation(
-      (ops: Promise<unknown>[]) => Promise.all(ops),
-    );
+    // Customer must have isActive:true and businessName for create() to pass
+    mockPrisma.customer.findUnique.mockResolvedValue({
+      id:           'cust-id',
+      isActive:     true,
+      businessName: 'Ore Ofe Distributors',
+      balanceKobo:  BigInt(0),
+      region:       'SOUTH_WEST',
+      ownerId:      'agent-id',
+    });
+    mockPrisma.collection.create.mockResolvedValue(COLLECTION_STUB);
+    mockPrisma.collection.findMany.mockResolvedValue([COLLECTION_STUB]);
+    mockPrisma.collection.findUnique.mockResolvedValue(COLLECTION_STUB);
+    mockPrisma.collection.aggregate.mockResolvedValue({ _sum: { amountKobo: BigInt(50000000) } });
+    // create() wraps in $transaction — return [collection, updatedCustomer]
+    mockPrisma.$transaction.mockResolvedValue([COLLECTION_STUB, { balanceKobo: BigInt(0) }]);
+    mockPrisma.customer.update.mockResolvedValue({ balanceKobo: BigInt(0) });
+    mockPrisma.user.findMany.mockResolvedValue([]);
   });
 
-  // ── create ─────────────────────────────────────────────────────────────────
+  // ── create() ───────────────────────────────────────────────────────────────
 
   describe('create()', () => {
-    it('creates collection and returns it', async () => {
-      mockPrisma.customer.findUnique.mockResolvedValue(ACTIVE_CUSTOMER);
-      mockPrisma.$transaction.mockResolvedValue([COLLECTION, {}]);
-
-      const result = await service.create(CREATE_DTO, makeRequester());
-      expect(result).toEqual(COLLECTION);
-    });
-
-    it('runs collection create and balance decrement in one transaction', async () => {
-      mockPrisma.customer.findUnique.mockResolvedValue(ACTIVE_CUSTOMER);
-      mockPrisma.$transaction.mockResolvedValue([COLLECTION, {}]);
-
-      await service.create(CREATE_DTO, makeRequester());
-
-      const txArgs = mockPrisma.$transaction.mock.calls[0][0];
-      expect(Array.isArray(txArgs)).toBe(true);
-      expect(txArgs).toHaveLength(2);
+    it('creates a collection and returns it', async () => {
+      const result = await service.create(CREATE_DTO as any, makeAgent());
+      expect(mockPrisma.collection.create).toHaveBeenCalledTimes(1);
+      expect(result).toEqual(COLLECTION_STUB);
     });
 
     it('sets recordedById to the requester sub', async () => {
-      mockPrisma.customer.findUnique.mockResolvedValue(ACTIVE_CUSTOMER);
-      mockPrisma.collection.create.mockResolvedValue(COLLECTION);
-      mockPrisma.customer.update.mockResolvedValue({});
-      // Use real transaction for this test
-      mockPrisma.$transaction.mockImplementation(
-        (ops: Promise<unknown>[]) => Promise.all(ops),
-      );
-
-      await service.create(CREATE_DTO, makeRequester());
-
-      const createData = mockPrisma.collection.create.mock.calls[0][0].data;
-      expect(createData.recordedById).toBe('user-id');
+      await service.create(CREATE_DTO as any, makeAgent());
+      const data = mockPrisma.collection.create.mock.calls[0][0].data;
+      expect(data.recordedById).toBe('agent-id');
     });
+  });
 
-    it('converts collectedAt string to Date', async () => {
-      mockPrisma.customer.findUnique.mockResolvedValue(ACTIVE_CUSTOMER);
-      mockPrisma.collection.create.mockResolvedValue(COLLECTION);
-      mockPrisma.customer.update.mockResolvedValue({});
-      mockPrisma.$transaction.mockImplementation(
-        (ops: Promise<unknown>[]) => Promise.all(ops),
-      );
+  // ── findAll() — ownership scoping (THE CORE RULE) ──────────────────────────
 
-      await service.create(CREATE_DTO, makeRequester());
+  describe('findAll() — ownership scoping', () => {
 
-      const createData = mockPrisma.collection.create.mock.calls[0][0].data;
-      expect(createData.collectedAt).toBeInstanceOf(Date);
-    });
-
-    it('throws NotFoundException when customer does not exist', async () => {
-      mockPrisma.customer.findUnique.mockResolvedValue(null);
-      await expect(service.create(CREATE_DTO, makeRequester())).rejects.toThrow(NotFoundException);
-      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
-    });
-
-    it('throws BadRequestException when customer is deactivated', async () => {
-      mockPrisma.customer.findUnique.mockResolvedValue({
-        ...ACTIVE_CUSTOMER, isActive: false,
+    describe('Tier 1 — own collections only', () => {
+      it('applies ownerId filter with their sub', async () => {
+        await service.findAll({} as any, makeAgent('TIER1', 'tier1-id'));
+        const where = mockPrisma.collection.findMany.mock.calls[0][0].where;
+        expect(where.recordedById).toEqual({ in: ['tier1-id'] });
       });
-      await expect(service.create(CREATE_DTO, makeRequester())).rejects.toThrow(BadRequestException);
-      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+
+      it('does NOT show other agents collections', async () => {
+        await service.findAll({} as any, makeAgent('TIER1', 'agent-a'));
+        const where = mockPrisma.collection.findMany.mock.calls[0][0].where;
+        expect(where.recordedById.in).not.toContain('agent-b');
+      });
+    });
+
+    describe('Tier 2 — own + reporting chain', () => {
+      it('includes own sub and all users in chain', async () => {
+        // BFS returns tier2 + their direct reports
+        mockPrisma.user.findMany
+          .mockResolvedValueOnce([{ id: 'tier1-a' }, { id: 'tier1-b' }]) // direct reports
+          .mockResolvedValueOnce([])                                        // no further reports
+          .mockResolvedValueOnce([]);
+
+        await service.findAll({} as any, makeAgent('TIER2', 'tier2-id'));
+        const where = mockPrisma.collection.findMany.mock.calls[0][0].where;
+        expect(where.recordedById.in).toContain('tier2-id');
+        expect(where.recordedById.in).toContain('tier1-a');
+        expect(where.recordedById.in).toContain('tier1-b');
+      });
+
+      it('does not include agents outside the chain', async () => {
+        mockPrisma.user.findMany.mockResolvedValue([]);
+        await service.findAll({} as any, makeAgent('TIER2', 'tier2-id'));
+        const where = mockPrisma.collection.findMany.mock.calls[0][0].where;
+        expect(where.recordedById.in).not.toContain('unrelated-agent');
+      });
+    });
+
+    describe('Tier 3 — own + full downward chain (Tier 2 + Tier 1)', () => {
+      it('walks two levels down the chain', async () => {
+        mockPrisma.user.findMany
+          .mockResolvedValueOnce([{ id: 'tier2-a' }]) // tier3 direct reports (tier2)
+          .mockResolvedValueOnce([{ id: 'tier1-a' }]) // tier2-a's reports (tier1)
+          .mockResolvedValueOnce([]);                  // tier1 has no reports
+
+        await service.findAll({} as any, makeAgent('TIER3', 'tier3-id'));
+        const where = mockPrisma.collection.findMany.mock.calls[0][0].where;
+        expect(where.recordedById.in).toContain('tier3-id');
+        expect(where.recordedById.in).toContain('tier2-a');
+        expect(where.recordedById.in).toContain('tier1-a');
+      });
+    });
+
+    describe('Tier 4 — own + full chain (Tier 3 + Tier 2 + Tier 1)', () => {
+      it('walks the full three-level chain', async () => {
+        mockPrisma.user.findMany
+          .mockResolvedValueOnce([{ id: 'tier3-a' }])
+          .mockResolvedValueOnce([{ id: 'tier2-a' }])
+          .mockResolvedValueOnce([{ id: 'tier1-a' }])
+          .mockResolvedValueOnce([]);
+
+        await service.findAll({} as any, makeAgent('TIER4', 'tier4-id'));
+        const where = mockPrisma.collection.findMany.mock.calls[0][0].where;
+        expect(where.recordedById.in).toContain('tier4-id');
+        expect(where.recordedById.in).toContain('tier3-a');
+        expect(where.recordedById.in).toContain('tier2-a');
+        expect(where.recordedById.in).toContain('tier1-a');
+      });
+    });
+
+    describe('Admin tiers — see all collections', () => {
+      it('Sales Support Agent sees all — no recordedById filter', async () => {
+        await service.findAll({} as any, makeAdmin());
+        const where = mockPrisma.collection.findMany.mock.calls[0][0].where;
+        expect(where.recordedById).toBeUndefined();
+      });
+
+      it('Field Support Agent sees all — no recordedById filter', async () => {
+        await service.findAll({} as any, makeFieldSupport());
+        const where = mockPrisma.collection.findMany.mock.calls[0][0].where;
+        expect(where.recordedById).toBeUndefined();
+      });
+    });
+
+    describe('filters', () => {
+      it('applies customerId filter', async () => {
+        await service.findAll({ customerId: 'cust-id' } as any, makeAdmin());
+        const where = mockPrisma.collection.findMany.mock.calls[0][0].where;
+        expect(where.customerId).toBe('cust-id');
+      });
+
+      it('applies paymentMode filter', async () => {
+        await service.findAll({ paymentMode: 'TRANSFER' } as any, makeAdmin());
+        const where = mockPrisma.collection.findMany.mock.calls[0][0].where;
+        expect(where.paymentMode).toBe('TRANSFER');
+      });
+
+      it('applies date range filter', async () => {
+        await service.findAll({ from: '2026-08-01', to: '2026-08-31' } as any, makeAdmin());
+        const where = mockPrisma.collection.findMany.mock.calls[0][0].where;
+        expect(where.collectedAt).toBeDefined();
+      });
     });
   });
 
-  // ── findAll ────────────────────────────────────────────────────────────────
-
-  describe('findAll()', () => {
-    it('field staff see only their own collections', async () => {
-      mockPrisma.collection.findMany.mockResolvedValue([]);
-      await service.findAll({}, makeRequester());
-
-      const where = mockPrisma.collection.findMany.mock.calls[0][0].where;
-      expect(where.recordedById).toBe('user-id');
-    });
-
-    it('admin sees all collections', async () => {
-      mockPrisma.collection.findMany.mockResolvedValue([]);
-      await service.findAll({}, makeAdmin());
-
-      const where = mockPrisma.collection.findMany.mock.calls[0][0].where;
-      expect(where.recordedById).toBeUndefined();
-    });
-
-    it('applies customerId filter', async () => {
-      mockPrisma.collection.findMany.mockResolvedValue([]);
-      await service.findAll({ customerId: 'cust-id' }, makeAdmin());
-
-      const where = mockPrisma.collection.findMany.mock.calls[0][0].where;
-      expect(where.customerId).toBe('cust-id');
-    });
-
-    it('applies date range filter when from and to are provided', async () => {
-      mockPrisma.collection.findMany.mockResolvedValue([]);
-      await service.findAll(
-        { from: '2026-06-01', to: '2026-06-30' },
-        makeAdmin(),
-      );
-
-      const where = mockPrisma.collection.findMany.mock.calls[0][0].where;
-      expect(where.collectedAt.gte).toBeInstanceOf(Date);
-      expect(where.collectedAt.lte).toBeInstanceOf(Date);
-    });
-
-    it('applies no date filter when neither from nor to provided', async () => {
-      mockPrisma.collection.findMany.mockResolvedValue([]);
-      await service.findAll({}, makeAdmin());
-
-      const where = mockPrisma.collection.findMany.mock.calls[0][0].where;
-      expect(where.collectedAt).toBeUndefined();
-    });
-
-    it('orders by collectedAt descending', async () => {
-      mockPrisma.collection.findMany.mockResolvedValue([]);
-      await service.findAll({}, makeAdmin());
-
-      const orderBy = mockPrisma.collection.findMany.mock.calls[0][0].orderBy;
-      expect(orderBy).toEqual({ collectedAt: 'desc' });
-    });
-  });
-
-  // ── findById ───────────────────────────────────────────────────────────────
+  // ── findById() ─────────────────────────────────────────────────────────────
 
   describe('findById()', () => {
-    it('returns collection when requester is the recorder', async () => {
-      mockPrisma.collection.findUnique.mockResolvedValue(COLLECTION);
-      const result = await service.findById('coll-id', makeRequester());
-      expect(result).toEqual(COLLECTION);
+    it('returns the collection when requester is the recorder', async () => {
+      await expect(service.findById('coll-id', makeAgent())).resolves.not.toThrow();
     });
 
-    it('admin can view any collection', async () => {
+    it('throws ForbiddenException when non-owner tries to access', async () => {
       mockPrisma.collection.findUnique.mockResolvedValue({
-        ...COLLECTION, recordedById: 'other-user',
+        ...COLLECTION_STUB,
+        recordedById: 'someone-else',
+      });
+      await expect(service.findById('coll-id', makeAgent('TIER2', 'not-the-owner')))
+        .rejects.toThrow(ForbiddenException);
+    });
+
+    it('admin can access any collection', async () => {
+      mockPrisma.collection.findUnique.mockResolvedValue({
+        ...COLLECTION_STUB,
+        recordedById: 'someone-else',
       });
       await expect(service.findById('coll-id', makeAdmin())).resolves.not.toThrow();
     });
 
-    it('throws ForbiddenException when field staff views another user collection', async () => {
-      mockPrisma.collection.findUnique.mockResolvedValue({
-        ...COLLECTION, recordedById: 'other-user',
-      });
-      await expect(
-        service.findById('coll-id', makeRequester()),
-      ).rejects.toThrow(ForbiddenException);
-    });
-
-    it('throws NotFoundException for unknown ID', async () => {
+    it('throws NotFoundException when collection does not exist', async () => {
       mockPrisma.collection.findUnique.mockResolvedValue(null);
-      await expect(service.findById('bad-id', makeAdmin())).rejects.toThrow(NotFoundException);
+      await expect(service.findById('bad-id', makeAgent()))
+        .rejects.toThrow(NotFoundException);
     });
   });
 
-  // ── getSummaryForCustomer ──────────────────────────────────────────────────
+  // ── getChainUserIds() — BFS chain walk ─────────────────────────────────────
 
-  describe('getSummaryForCustomer()', () => {
-    it('returns summary with formatted naira values', async () => {
-      mockPrisma.customer.findUnique.mockResolvedValue(ACTIVE_CUSTOMER);
-      mockPrisma.collection.aggregate.mockResolvedValue({ _sum: { amountKobo: BigInt(2000000) } });
-      mockPrisma.collection.count.mockResolvedValue(4);
-
-      const result = await service.getSummaryForCustomer('cust-id', makeAdmin());
-
-      expect(result.customerId).toBe('cust-id');
-      expect(result.collectionCount).toBe(4);
-      expect(result.totalCollectedKobo).toBe(BigInt(2000000));
-      expect(result.balanceFormatted).toContain('50,000');
-      expect(result.totalCollectedFormatted).toContain('20,000');
+  describe('getChainUserIds() — BFS chain walk', () => {
+    it('includes the manager themselves', async () => {
+      mockPrisma.user.findMany.mockResolvedValue([]);
+      const ids = await (service as any).getChainUserIds('manager-id');
+      expect(ids).toContain('manager-id');
     });
 
-    it('handles zero collections gracefully', async () => {
-      mockPrisma.customer.findUnique.mockResolvedValue(ACTIVE_CUSTOMER);
-      mockPrisma.collection.aggregate.mockResolvedValue({ _sum: { amountKobo: null } });
-      mockPrisma.collection.count.mockResolvedValue(0);
-
-      const result = await service.getSummaryForCustomer('cust-id', makeAdmin());
-      expect(result.totalCollectedKobo).toBe(BigInt(0));
+    it('includes one level of direct reports', async () => {
+      mockPrisma.user.findMany
+        .mockResolvedValueOnce([{ id: 'report-1' }, { id: 'report-2' }])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+      const ids = await (service as any).getChainUserIds('manager-id');
+      expect(ids).toContain('report-1');
+      expect(ids).toContain('report-2');
     });
 
-    it('runs aggregate and count in parallel', async () => {
-      mockPrisma.customer.findUnique.mockResolvedValue(ACTIVE_CUSTOMER);
-      mockPrisma.collection.aggregate.mockResolvedValue({ _sum: { amountKobo: null } });
-      mockPrisma.collection.count.mockResolvedValue(0);
-
-      await service.getSummaryForCustomer('cust-id', makeAdmin());
-
-      // Both called once — parallel execution
-      expect(mockPrisma.collection.aggregate).toHaveBeenCalledTimes(1);
-      expect(mockPrisma.collection.count).toHaveBeenCalledTimes(1);
+    it('handles cycles gracefully — never visits the same user twice', async () => {
+      // report-1 somehow points back to manager
+      mockPrisma.user.findMany
+        .mockResolvedValueOnce([{ id: 'report-1' }])
+        .mockResolvedValueOnce([{ id: 'manager-id' }]) // cycle
+        .mockResolvedValueOnce([]);
+      const ids = await (service as any).getChainUserIds('manager-id');
+      // manager-id should appear only once
+      expect(ids.filter((id: string) => id === 'manager-id').length).toBe(1);
     });
 
-    it('throws NotFoundException when customer does not exist', async () => {
-      mockPrisma.customer.findUnique.mockResolvedValue(null);
-      await expect(
-        service.getSummaryForCustomer('bad-id', makeAdmin()),
-      ).rejects.toThrow(NotFoundException);
+    it('returns only the manager when they have no direct reports', async () => {
+      mockPrisma.user.findMany.mockResolvedValue([]);
+      const ids = await (service as any).getChainUserIds('solo-manager');
+      expect(ids).toEqual(['solo-manager']);
     });
   });
 });

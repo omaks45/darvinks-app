@@ -1,4 +1,4 @@
-
+// src/modules/attendance/attendance.service.ts
 import {
   BadRequestException,
   ForbiddenException,
@@ -34,7 +34,7 @@ export class AttendanceService {
     @InjectQueue('notifications') private readonly notifyQueue: Queue,
   ) {}
 
-  //  Clock In 
+  // ─── Clock In ─────────────────────────────────────────────────────────────
 
   async clockIn(
     requester: JwtPayload,
@@ -95,7 +95,7 @@ export class AttendanceService {
     return event;
   }
 
-  //  Clock Out 
+  // ─── Clock Out ────────────────────────────────────────────────────────────
 
   async clockOut(
     requester: JwtPayload,
@@ -156,15 +156,17 @@ export class AttendanceService {
     return event;
   }
 
-  //  KD Visit (Tier 1 only) ───────────────────────────────────────────────
+  // ─── KD Visit (Tier 1 only) ───────────────────────────────────────────────
 
   async recordKdVisit(
     requester: JwtPayload,
     dto: KdVisitDto,
     photo: Express.Multer.File,
   ) {
-    if (requester.tier !== 'TIER1') {
-      throw new ForbiddenException('KD visits are recorded by Tier 1 agents only');
+    // KD visits are for all field tiers (Tier 1–4)
+    const FIELD_TIERS = ['TIER1', 'TIER2', 'TIER3', 'TIER4'];
+    if (!FIELD_TIERS.includes(requester.tier as string)) {
+      throw new ForbiddenException('KD visits are recorded by field agents (Tier 1–4) only');
     }
 
     const deviceTime = new Date(dto.deviceTime);
@@ -196,7 +198,89 @@ export class AttendanceService {
     });
   }
 
-  //  Offline Batch Sync ───────────────────────────────────────────────────
+  // ── End KD Visit ───────────────────────────────────────────────────────────
+
+  /**
+   * Logs that the agent has left a KD. The client pairs this event with the
+   * preceding KD_VISIT row by matching kdAccountId + date on the frontend to
+   * calculate visit duration. The server records the departure GPS and time.
+   */
+  async endKdVisit(
+    requester: JwtPayload,
+    dto: KdVisitDto,
+    photo: Express.Multer.File,
+  ) {
+    const FIELD_TIERS = ['TIER1', 'TIER2', 'TIER3', 'TIER4'];
+    if (!FIELD_TIERS.includes(requester.tier as string)) {
+      throw new ForbiddenException('KD visits are recorded by field agents (Tier 1–4) only');
+    }
+
+    // Verify there is an open KD_VISIT for this KD today
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
+
+    const openVisit = await this.prisma.attendanceEvent.findFirst({
+      where: {
+        userId:      requester.sub,
+        type:        AttendanceType.KD_VISIT,
+        kdAccountId: dto.kdAccountId,
+        serverTime:  { gte: today },
+      },
+      orderBy: { serverTime: 'desc' },
+    });
+
+    if (!openVisit) {
+      throw new BadRequestException(
+        'No open KD visit found for this customer today. Log a KD Visit arrival first.',
+      );
+    }
+
+    // Check this KD has not already been ended today
+    const alreadyEnded = await this.prisma.attendanceEvent.findFirst({
+      where: {
+        userId:      requester.sub,
+        type:        AttendanceType.KD_VISIT_END as any,
+        kdAccountId: dto.kdAccountId,
+        serverTime:  { gte: today },
+      },
+    });
+
+    if (alreadyEnded) {
+      throw new BadRequestException(
+        'A KD visit end has already been logged for this customer today.',
+      );
+    }
+
+    const deviceTime = new Date(dto.deviceTime);
+
+    const photoUrl = await this.uploadAttendancePhoto(
+      photo,
+      'attendance/kd-visits',
+      requester.sub,
+      deviceTime,
+      dto.latitude,
+      dto.longitude,
+    );
+
+    const { address: kdAddress } = await this.maps.reverseGeocode(dto.latitude, dto.longitude);
+
+    return this.prisma.attendanceEvent.create({
+      data: {
+        userId:      requester.sub,
+        type:        'KD_VISIT_END' as any,
+        flag:        AttendanceFlag.ON_TIME,
+        photoUrl,
+        latitude:    dto.latitude,
+        longitude:   dto.longitude,
+        address:     kdAddress ?? null,
+        kdAccountId: dto.kdAccountId,
+        deviceTime,
+        note:        dto.note,
+      },
+    });
+  }
+
+  // ─── Offline Batch Sync ───────────────────────────────────────────────────
 
   /**
    * Accepts a batch of offline-queued events from the mobile device.
@@ -273,7 +357,7 @@ export class AttendanceService {
     return { processed, skipped };
   }
 
-  //  Query ────────────────────────────────────────────────────────────────
+  // ─── Query ────────────────────────────────────────────────────────────────
 
   async findEvents(requester: JwtPayload, query: AttendanceQueryDto) {
     const { userId, from, to, type } = query;
@@ -327,7 +411,7 @@ export class AttendanceService {
     return event !== null;
   }
 
-  //  Today's clock-in/out status ───────────────────────────────────────────
+  // ── Today's clock-in/out status ───────────────────────────────────────────
 
   async getTodayStatus(userId: string) {
     const { gte: startOfDay, lte: endOfDay } = this.dayBoundsUTC(new Date());
@@ -402,7 +486,7 @@ export class AttendanceService {
     };
   }
 
-  //  Private helpers 
+  // ─── Private helpers ──────────────────────────────────────────────────────
 
   private async uploadAttendancePhoto(
     photo: Express.Multer.File,

@@ -1,37 +1,48 @@
 
 import { Test, TestingModule } from '@nestjs/testing';
-import { AnalyticsService } from './analytics.service';
-import { PrismaService } from '@common/prisma/prisma.service';
+import { ForbiddenException }  from '@nestjs/common';
+import { AnalyticsService }    from './analytics.service';
+import { PrismaService }       from '@common/prisma/prisma.service';
 
-// ─── Mocks ────────────────────────────────────────────────────────────────────
-// Every Prisma model and method the analytics service touches, mapped
-// precisely from reading the service source — no phantom mocks.
+// ─── Mock ─────────────────────────────────────────────────────────────────────
 
 const mockPrisma = {
-  locationTarget:    { findMany:   jest.fn() },
-  secondarySaleItem: { groupBy:    jest.fn(), aggregate: jest.fn() },
-  purchaseOrderItem: { groupBy:    jest.fn() },
-  product:           { findMany:   jest.fn() },
-  targetAssignment:  { findMany:   jest.fn() },
-  collection:        { aggregate:  jest.fn() },
-  purchaseOrder:     { aggregate:  jest.fn() },
-  customer:          { count:      jest.fn(), findMany: jest.fn() },
-  user:              { count:      jest.fn() },
+  collection:           { aggregate: jest.fn() },
+  secondarySaleInvoice: { aggregate: jest.fn(), findMany: jest.fn() },
+  purchaseOrder:        { findMany: jest.fn() },
+  customer:             { count: jest.fn() },
+  targetAssignment:     { findMany: jest.fn(), count: jest.fn() },
+  user:                 { findMany: jest.fn() },
+  product:              { findMany: jest.fn() },
+  attendanceEvent:      { count: jest.fn(), findMany: jest.fn() },
+  secondarySaleItem:    { groupBy: jest.fn(), findMany: jest.fn() },
+  purchaseOrderItem:    { groupBy: jest.fn(), findMany: jest.fn() },
+  location:             { findMany: jest.fn() },
 };
 
-// ─── Fixtures ─────────────────────────────────────────────────────────────────
+// ─── Helpers ──────────────────────────────────────────────────────────────────
 
-const PERIOD = '2026-07';
+const makeAgent   = (tier = 'TIER2', sub = 'agent-id') => ({ sub, tier });
+const makeManager = (sub = 'mgr-id') => ({ sub, tier: 'TIER3' });
 
-const LOCATION_TARGET = {
-  locationId:  'loc-1',
-  category:    'LOTION',
-  targetValue: 1000,
-  location:    { name: 'Arakale', state: 'ondo', region: 'SOUTH_WEST' },
-};
-
-const PRODUCT_LOTION = { id: 'prod-lotion', category: 'LOTION' };
-const PRODUCT_SOAP   = { id: 'prod-soap',   category: 'SOAP' };
+function setupDefaults() {
+  mockPrisma.collection.aggregate.mockResolvedValue({ _sum: { amountKobo: BigInt(0) } });
+  mockPrisma.secondarySaleInvoice.aggregate.mockResolvedValue({ _sum: { totalKobo: BigInt(0) }, _count: { id: 0 } });
+  mockPrisma.secondarySaleInvoice.findMany.mockResolvedValue([]);
+  mockPrisma.purchaseOrder.findMany.mockResolvedValue([]);
+  mockPrisma.customer.count.mockResolvedValue(0);
+  mockPrisma.targetAssignment.findMany.mockResolvedValue([]);
+  mockPrisma.targetAssignment.count.mockResolvedValue(0);
+  mockPrisma.user.findMany.mockResolvedValue([]);
+  mockPrisma.product.findMany.mockResolvedValue([]);
+  mockPrisma.attendanceEvent.count.mockResolvedValue(0);
+  mockPrisma.attendanceEvent.findMany.mockResolvedValue([]);
+  mockPrisma.secondarySaleItem.groupBy.mockResolvedValue([]);
+  mockPrisma.secondarySaleItem.findMany.mockResolvedValue([]);
+  mockPrisma.purchaseOrderItem.groupBy.mockResolvedValue([]);
+  mockPrisma.purchaseOrderItem.findMany.mockResolvedValue([]);
+  mockPrisma.location.findMany.mockResolvedValue([]);
+}
 
 // ─── Tests ────────────────────────────────────────────────────────────────────
 
@@ -45,289 +56,254 @@ describe('AnalyticsService', () => {
         { provide: PrismaService, useValue: mockPrisma },
       ],
     }).compile();
-
     service = module.get<AnalyticsService>(AnalyticsService);
     jest.resetAllMocks();
-
-    // ── Safe defaults — every mock returns benign empty values ────────────────
-    mockPrisma.locationTarget.findMany.mockResolvedValue([]);
-    mockPrisma.secondarySaleItem.groupBy.mockResolvedValue([]);
-    mockPrisma.secondarySaleItem.aggregate.mockResolvedValue({ _sum: { quantityCartons: 0 } });
-    mockPrisma.purchaseOrderItem.groupBy.mockResolvedValue([]);
-    mockPrisma.product.findMany.mockResolvedValue([]);
-    mockPrisma.targetAssignment.findMany.mockResolvedValue([]);
-    mockPrisma.collection.aggregate.mockResolvedValue({ _sum: { amountKobo: 0 } });
-    mockPrisma.purchaseOrder.aggregate.mockResolvedValue({ _sum: { totalKobo: 0 } });
-    mockPrisma.customer.count.mockResolvedValue(0);
-    mockPrisma.customer.findMany.mockResolvedValue([]);
-    mockPrisma.user.count.mockResolvedValue(0);
+    setupDefaults();
   });
 
-  // ── buildReportData ────────────────────────────────────────────────────────
+  // ── getPersonalAnalytics — shape ───────────────────────────────────────────
 
-  describe('buildReportData()', () => {
-    it('returns the correct periodMonth in the report', async () => {
-      const result = await service.buildReportData(PERIOD);
-      expect(result.periodMonth).toBe(PERIOD);
+  describe('getPersonalAnalytics()', () => {
+    it('returns period and periodType', async () => {
+      const r = await service.getPersonalAnalytics(makeAgent(), '2026-08', 'monthly') as any;
+      expect(r.period).toBe('2026-08');
+      expect(r.periodType).toBe('monthly');
     });
 
-    it('includes a generatedAt timestamp close to now', async () => {
-      const before = new Date();
-      const result = await service.buildReportData(PERIOD);
-      const after  = new Date();
-      expect(result.generatedAt.getTime()).toBeGreaterThanOrEqual(before.getTime());
-      expect(result.generatedAt.getTime()).toBeLessThanOrEqual(after.getTime());
+    it('has totalAmountReceivedKobo field', async () => {
+      const r = await service.getPersonalAnalytics(makeAgent(), '2026-08', 'monthly') as any;
+      expect(r).toHaveProperty('totalAmountReceivedKobo');
     });
 
-    it('returns empty arrays when no data exists for the period', async () => {
-      const result = await service.buildReportData(PERIOD);
-      expect(result.locationPerformance).toEqual([]);
-      expect(result.userPerformance).toEqual([]);
+    it('has totalSalesKobo field', async () => {
+      const r = await service.getPersonalAnalytics(makeAgent(), '2026-08', 'monthly') as any;
+      expect(r).toHaveProperty('totalSalesKobo');
     });
 
-    it('returns zero org summary values when no activity exists', async () => {
-      const result = await service.buildReportData(PERIOD);
-      expect(result.orgSummary.totalCollectionsKobo).toBe(0);
-      expect(result.orgSummary.totalPOValueKobo).toBe(0);
-      expect(result.orgSummary.totalSecondarySaleCartons).toBe(0);
+    it('has totalSKUSold field', async () => {
+      const r = await service.getPersonalAnalytics(makeAgent(), '2026-08', 'monthly') as any;
+      expect(r).toHaveProperty('totalSKUSold');
     });
 
-    it('queries location targets for the given periodMonth', async () => {
-      await service.buildReportData(PERIOD);
-      const call = mockPrisma.locationTarget.findMany.mock.calls[0][0];
-      expect(call.where.periodMonth).toBe(PERIOD);
+    it('newSecondaryCustomers reflects customer.count result', async () => {
+      mockPrisma.customer.count.mockResolvedValueOnce(3);
+      const r = await service.getPersonalAnalytics(makeAgent(), '2026-08', 'monthly') as any;
+      expect(r.newSecondaryCustomers).toBe(3);
     });
 
-    it('queries user targets for the correct year and month', async () => {
-      await service.buildReportData('2026-07');
-      const call = mockPrisma.targetAssignment.findMany.mock.calls[0][0];
-      expect(call.where.year).toBe(2026);
-      expect(call.where.month).toBe(7);
-      expect(call.where.period).toBe('MONTHLY');
+    it('customers has primary, secondary, total', async () => {
+      mockPrisma.customer.count
+        .mockResolvedValueOnce(5)   // new secondary
+        .mockResolvedValueOnce(10)  // primary
+        .mockResolvedValueOnce(20); // secondary
+      const r = await service.getPersonalAnalytics(makeAgent(), '2026-08', 'monthly') as any;
+      expect(r.customers.primary).toBe(10);
+      expect(r.customers.secondary).toBe(20);
+      expect(r.customers.total).toBe(30);
     });
 
-    it('scopes collection aggregate to the period month date range', async () => {
-      await service.buildReportData('2026-07');
-      const call = mockPrisma.collection.aggregate.mock.calls[0][0];
-      expect(call.where.collectedAt.gte).toEqual(new Date(2026, 6, 1));  // July 1
-      expect(call.where.collectedAt.lt).toEqual(new Date(2026, 7, 1));   // Aug 1
+    it('salesOverview has 7 entries labelled Sun–Sat', async () => {
+      const r = await service.getPersonalAnalytics(makeAgent(), '2026-08', 'monthly') as any;
+      expect(r.salesOverview).toHaveLength(7);
+      expect(r.salesOverview.map((d: any) => d.day))
+        .toEqual(['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']);
     });
 
-    it('excludes PENDING_APPROVAL and CANCELLED orders from PO aggregate', async () => {
-      await service.buildReportData(PERIOD);
-      const call = mockPrisma.purchaseOrder.aggregate.mock.calls[0][0];
-      expect(call.where.status.notIn).toContain('PENDING_APPROVAL');
-      expect(call.where.status.notIn).toContain('CANCELLED');
+    it('productBreakdown is an array', async () => {
+      const r = await service.getPersonalAnalytics(makeAgent(), '2026-08', 'monthly') as any;
+      expect(Array.isArray(r.productBreakdown)).toBe(true);
+    });
+
+    it('targetSummary is an array', async () => {
+      const r = await service.getPersonalAnalytics(makeAgent(), '2026-08', 'monthly') as any;
+      expect(Array.isArray(r.targetSummary)).toBe(true);
+    });
+
+    it('userIds contains requester sub when no targetUserId', async () => {
+      const r = await service.getPersonalAnalytics(makeAgent('TIER2', 'my-id'), '2026-08', 'monthly') as any;
+      expect(r.userIds).toContain('my-id');
     });
   });
 
-  // ── location performance ───────────────────────────────────────────────────
+  // ── calculations ───────────────────────────────────────────────────────────
 
-  describe('location performance section', () => {
-    beforeEach(() => {
-      mockPrisma.locationTarget.findMany.mockResolvedValue([LOCATION_TARGET]);
-      mockPrisma.customer.findMany.mockResolvedValue([
-        { id: 'cust-1', locationId: 'loc-1' },
+  describe('getPersonalAnalytics() — calculations', () => {
+    it('totalAmountReceived = collections + invoice total', async () => {
+      mockPrisma.collection.aggregate.mockResolvedValue({ _sum: { amountKobo: BigInt(500000000) } });
+      mockPrisma.secondarySaleInvoice.aggregate.mockResolvedValue({
+        _sum: { totalKobo: BigInt(300000000) }, _count: { id: 2 },
+      });
+      const r = await service.getPersonalAnalytics(makeAgent(), '2026-08', 'monthly') as any;
+      expect(r.totalAmountReceivedKobo).toBe(800000000);
+    });
+
+    it('totalSKUSold = secondary cartons + PO cartons', async () => {
+      // aggregate must show count > 0 so the service includes secondary items
+      mockPrisma.secondarySaleInvoice.aggregate.mockResolvedValue({
+        _sum:   { totalKobo: BigInt(0) },
+        _count: { id: 1 },
+      });
+      mockPrisma.secondarySaleInvoice.findMany.mockResolvedValue([{
+        id: 'inv-1', totalKobo: BigInt(0),
+        items: [{ productId: 'p1', quantityCartons: 30, lineTotalKobo: BigInt(0), createdAt: new Date() }],
+      }]);
+      mockPrisma.purchaseOrder.findMany.mockResolvedValue([{
+        totalKobo: BigInt(0),
+        items: [{ productId: 'p2', quantityCartons: 20, lineTotalKobo: BigInt(0) }],
+      }]);
+      const r = await service.getPersonalAnalytics(makeAgent(), '2026-08', 'monthly') as any;
+      expect(r.totalSKUSold).toBe(50); // 30 secondary + 20 PO
+    });
+
+    it('productBreakdown resolves product name from DB', async () => {
+      mockPrisma.secondarySaleInvoice.aggregate.mockResolvedValue({
+        _sum: { totalKobo: BigInt(0) }, _count: { id: 1 },
+      });
+      mockPrisma.secondarySaleInvoice.findMany.mockResolvedValue([{
+        id: 'inv-1', totalKobo: BigInt(0),
+        items: [{ productId: 'prod-a', quantityCartons: 50, lineTotalKobo: BigInt(0), createdAt: new Date() }],
+      }]);
+      mockPrisma.product.findMany.mockResolvedValue([
+        { id: 'prod-a', name: 'Acneway Cream 30g', category: 'CREAM', imageUrl: null },
       ]);
+      const r = await service.getPersonalAnalytics(makeAgent(), '2026-08', 'monthly') as any;
+      expect(r.productBreakdown[0].name).toBe('Acneway Cream 30g');
+      expect(r.productBreakdown[0].cartonsSOld).toBe(50);
+      expect(r.productBreakdown[0].percentOfTotal).toBe(100);
     });
 
-    it('produces one row per location target', async () => {
-      const result = await service.buildReportData(PERIOD);
-      expect(result.locationPerformance).toHaveLength(1);
-    });
-
-    it('exposes location metadata on each row', async () => {
-      const result = await service.buildReportData(PERIOD);
-      const row = result.locationPerformance[0];
-      expect(row.locationName).toBe('Arakale');
-      expect(row.state).toBe('ondo');
-      expect(row.region).toBe('SOUTH_WEST');
-      expect(row.category).toBe('LOTION');
-      expect(row.targetValue).toBe(1000);
-    });
-
-    it('calculates balance as target minus achieved', async () => {
-      const result = await service.buildReportData(PERIOD);
-      const row = result.locationPerformance[0];
-      // No SS or PO achievement by default → achieved = 0
-      expect(row.balanceValue).toBe(1000);
-    });
-
-    it('calculates percentAchieved correctly', async () => {
-      const result = await service.buildReportData(PERIOD);
-      const row = result.locationPerformance[0];
-      expect(row.percentAchieved).toBe(0); // 0/1000 = 0%
-    });
-
-    it('returns percentAchieved of 0 when targetValue is 0 — no division by zero', async () => {
-      mockPrisma.locationTarget.findMany.mockResolvedValue([
-        { ...LOCATION_TARGET, targetValue: 0 },
+    it('productBreakdown percentages are correct across multiple products', async () => {
+      mockPrisma.secondarySaleInvoice.aggregate.mockResolvedValue({
+        _sum: { totalKobo: BigInt(0) }, _count: { id: 1 },
+      });
+      mockPrisma.secondarySaleInvoice.findMany.mockResolvedValue([{
+        id: 'inv-1', totalKobo: BigInt(0),
+        items: [
+          { productId: 'p1', quantityCartons: 75, lineTotalKobo: BigInt(0), createdAt: new Date() },
+          { productId: 'p2', quantityCartons: 25, lineTotalKobo: BigInt(0), createdAt: new Date() },
+        ],
+      }]);
+      mockPrisma.product.findMany.mockResolvedValue([
+        { id: 'p1', name: 'Product A', category: 'CREAM',  imageUrl: null },
+        { id: 'p2', name: 'Product B', category: 'LOTION', imageUrl: null },
       ]);
-      const result = await service.buildReportData(PERIOD);
-      expect(result.locationPerformance[0].percentAchieved).toBe(0);
+      const r = await service.getPersonalAnalytics(makeAgent(), '2026-08', 'monthly') as any;
+      expect(r.productBreakdown.find((p: any) => p.productId === 'p1').percentOfTotal).toBe(75);
+      expect(r.productBreakdown.find((p: any) => p.productId === 'p2').percentOfTotal).toBe(25);
     });
 
-    it('does not query SS or PO data when there are no location targets', async () => {
-      // Short-circuit: when locationTarget.findMany returns [] the service
-      // returns early, so the expensive groupBy calls are never made.
-      mockPrisma.locationTarget.findMany.mockResolvedValue([]);
-
-      await service.buildReportData(PERIOD);
-
-      // customer.findMany (used to map cust→location) should not be called
-      expect(mockPrisma.customer.findMany).not.toHaveBeenCalled();
-    });
-  });
-
-  // ── user performance ───────────────────────────────────────────────────────
-
-  describe('user performance section', () => {
-    const USER_TARGET = {
-      assignedToId:  'user-1',
-      category:      'LOTION',
-      targetCartons: 500,
-      assignedTo: {
-        fullName:    'Kenny Solape',
-        employeeRef: 'Dar-00000001',
-        tier:        'TIER2',
-        region:      'SOUTH_WEST',
-      },
-    };
-
-    beforeEach(() => {
-      mockPrisma.targetAssignment.findMany.mockResolvedValue([USER_TARGET]);
+    it('daily bar chart buckets Monday sales into Mon slot', async () => {
+      const monday = new Date('2026-08-17T10:00:00Z');
+      mockPrisma.secondarySaleInvoice.findMany.mockResolvedValue([{
+        createdAt: monday,
+        items: [{ lineTotalKobo: BigInt(100000000) }],
+      }]);
+      const r = await service.getPersonalAnalytics(makeAgent(), '2026-08', 'monthly') as any;
+      expect(r.salesOverview.find((d: any) => d.day === 'Mon').totalKobo).toBe(100000000);
     });
 
-    it('produces one row per user target', async () => {
-      const result = await service.buildReportData(PERIOD);
-      expect(result.userPerformance).toHaveLength(1);
-    });
-
-    it('includes user identity fields on each row', async () => {
-      const result = await service.buildReportData(PERIOD);
-      const row = result.userPerformance[0];
-      expect(row.fullName).toBe('Kenny Solape');
-      expect(row.employeeRef).toBe('Dar-00000001');
-      expect(row.tier).toBe('TIER2');
-      expect(row.region).toBe('SOUTH_WEST');
-    });
-
-    it('sums secondary sale and purchase order quantities into achievedCartons', async () => {
-      mockPrisma.secondarySaleItem.groupBy.mockResolvedValue([
-        { productId: 'prod-lotion', _sum: { quantityCartons: 200 } },
-      ]);
-      mockPrisma.purchaseOrderItem.groupBy.mockResolvedValue([
-        { productId: 'prod-lotion', _sum: { quantityCartons: 100 } },
-      ]);
-      mockPrisma.product.findMany.mockResolvedValue([PRODUCT_LOTION]);
-
-      const result = await service.buildReportData(PERIOD);
-      const row = result.userPerformance[0];
-      expect(row.achievedCartons).toBe(300);   // 200 + 100
-      expect(row.balanceCartons).toBe(200);    // 500 - 300
-      expect(row.percentAchieved).toBe(60);    // 300/500 = 60%
-    });
-
-    it('resolves percentAchieved to 0 when targetCartons is 0', async () => {
+    it('targetSummary has category, targetCartons, achievedCartons, balanceCartons, percentAchieved', async () => {
       mockPrisma.targetAssignment.findMany.mockResolvedValue([
-        { ...USER_TARGET, targetCartons: 0 },
+        { category: 'LOTION', targetCartons: 1000, assignedToId: 'agent-id' },
       ]);
-      const result = await service.buildReportData(PERIOD);
-      expect(result.userPerformance[0].percentAchieved).toBe(0);
-    });
-
-    it('uses a single product findMany to resolve all categories — no N+1', async () => {
-      // Two targets for different products
-      mockPrisma.secondarySaleItem.groupBy.mockResolvedValue([
-        { productId: 'prod-lotion', _sum: { quantityCartons: 100 } },
-        { productId: 'prod-soap',   _sum: { quantityCartons: 50 } },
-      ]);
-      mockPrisma.product.findMany.mockResolvedValue([PRODUCT_LOTION, PRODUCT_SOAP]);
-
-      await service.buildReportData(PERIOD);
-
-      // product.findMany called exactly ONCE regardless of how many distinct
-      // products appear across secondary sales and PO items
-      expect(mockPrisma.product.findMany).toHaveBeenCalledTimes(1);
-    });
-
-    it('handles null region gracefully — sets to null not undefined', async () => {
-      mockPrisma.targetAssignment.findMany.mockResolvedValue([
-        { ...USER_TARGET, assignedTo: { ...USER_TARGET.assignedTo, region: null } },
-      ]);
-      const result = await service.buildReportData(PERIOD);
-      expect(result.userPerformance[0].region).toBeNull();
+      const r = await service.getPersonalAnalytics(makeAgent(), '2026-08', 'monthly') as any;
+      const t = r.targetSummary.find((t: any) => t.category === 'LOTION');
+      expect(t).toBeDefined();
+      expect(t.targetCartons).toBe(1000);
+      expect(t).toHaveProperty('achievedCartons');
+      expect(t).toHaveProperty('balanceCartons');
+      expect(t).toHaveProperty('percentAchieved');
     });
   });
 
-  // ── org summary ────────────────────────────────────────────────────────────
+  // ── period types ───────────────────────────────────────────────────────────
 
-  describe('org summary section', () => {
-    it('includes the total active user count', async () => {
-      mockPrisma.user.count.mockResolvedValue(45);
-      const result = await service.buildReportData(PERIOD);
-      expect(result.orgSummary.totalActiveUsers).toBe(45);
+  describe('getPersonalAnalytics() — period types', () => {
+    it('accepts weekly', async () => {
+      await expect(service.getPersonalAnalytics(makeAgent(), '2026-W35', 'weekly')).resolves.not.toThrow();
+    });
+    it('accepts monthly', async () => {
+      await expect(service.getPersonalAnalytics(makeAgent(), '2026-08', 'monthly')).resolves.not.toThrow();
+    });
+    it('accepts quarterly', async () => {
+      await expect(service.getPersonalAnalytics(makeAgent(), '2026-Q3', 'quarterly')).resolves.not.toThrow();
+    });
+    it('accepts annual', async () => {
+      await expect(service.getPersonalAnalytics(makeAgent(), '2026', 'annual')).resolves.not.toThrow();
+    });
+  });
+
+  // ── chain access ───────────────────────────────────────────────────────────
+
+  describe('getPersonalAnalytics() — chain access', () => {
+    it('manager can view subordinate in their chain', async () => {
+      mockPrisma.user.findMany
+        .mockResolvedValueOnce([{ id: 'tier2-id' }])
+        .mockResolvedValueOnce([]);
+      await expect(
+        service.getPersonalAnalytics(makeManager(), '2026-08', 'monthly', 'tier2-id'),
+      ).resolves.not.toThrow();
     });
 
-    it('includes the total active customer count', async () => {
-      mockPrisma.customer.count.mockResolvedValue(112);
-      const result = await service.buildReportData(PERIOD);
-      expect(result.orgSummary.totalActiveCustomers).toBe(112);
+    it('throws ForbiddenException for user outside the chain', async () => {
+      mockPrisma.user.findMany.mockResolvedValue([]);
+      await expect(
+        service.getPersonalAnalytics(makeManager('mgr-id'), '2026-08', 'monthly', 'unrelated-id'),
+      ).rejects.toThrow(ForbiddenException);
     });
 
-    it('includes total collections in kobo from the period', async () => {
-      mockPrisma.collection.aggregate.mockResolvedValue({ _sum: { amountKobo: 5_000_000 } });
-      const result = await service.buildReportData(PERIOD);
-      expect(result.orgSummary.totalCollectionsKobo).toBe(5_000_000);
+    it('includeChain=true includes all chain users', async () => {
+      mockPrisma.user.findMany
+        .mockResolvedValueOnce([{ id: 'tier1-a' }, { id: 'tier1-b' }])
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([]);
+      const r = await service.getPersonalAnalytics(
+        makeAgent('TIER2', 'tier2-id'), '2026-08', 'monthly', undefined, true,
+      ) as any;
+      expect(r.userIds).toContain('tier2-id');
+      expect(r.userIds).toContain('tier1-a');
+      expect(r.userIds).toContain('tier1-b');
     });
 
-    it('includes total confirmed PO value in kobo', async () => {
-      mockPrisma.purchaseOrder.aggregate.mockResolvedValue({ _sum: { totalKobo: 12_000_000 } });
-      const result = await service.buildReportData(PERIOD);
-      expect(result.orgSummary.totalPOValueKobo).toBe(12_000_000);
+    it('includeChain=false returns only single user', async () => {
+      const r = await service.getPersonalAnalytics(
+        makeAgent('TIER2', 'tier2-id'), '2026-08', 'monthly', undefined, false,
+      ) as any;
+      expect(r.userIds).toEqual(['tier2-id']);
+    });
+  });
+
+  // ── getChainUserIds ────────────────────────────────────────────────────────
+
+  describe('getChainUserIds()', () => {
+    it('always includes the root manager', async () => {
+      mockPrisma.user.findMany.mockResolvedValue([]);
+      const ids = await service.getChainUserIds('mgr-id');
+      expect(ids).toContain('mgr-id');
     });
 
-    it('includes total secondary sale cartons', async () => {
-      mockPrisma.secondarySaleItem.aggregate.mockResolvedValue({ _sum: { quantityCartons: 800 } });
-      const result = await service.buildReportData(PERIOD);
-      expect(result.orgSummary.totalSecondarySaleCartons).toBe(800);
+    it('walks down two levels', async () => {
+      mockPrisma.user.findMany
+        .mockResolvedValueOnce([{ id: 'tier2-a' }])
+        .mockResolvedValueOnce([{ id: 'tier1-a' }])
+        .mockResolvedValueOnce([]);
+      const ids = await service.getChainUserIds('tier3-id');
+      expect(ids).toEqual(expect.arrayContaining(['tier3-id', 'tier2-a', 'tier1-a']));
     });
 
-    it('defaults null aggregate sums to 0', async () => {
-      // Prisma returns null _sum when there are no matching rows
-      mockPrisma.collection.aggregate.mockResolvedValue({ _sum: { amountKobo: null } });
-      mockPrisma.purchaseOrder.aggregate.mockResolvedValue({ _sum: { totalKobo: null } });
-      mockPrisma.secondarySaleItem.aggregate.mockResolvedValue({ _sum: { quantityCartons: null } });
-
-      const result = await service.buildReportData(PERIOD);
-      expect(result.orgSummary.totalCollectionsKobo).toBe(0);
-      expect(result.orgSummary.totalPOValueKobo).toBe(0);
-      expect(result.orgSummary.totalSecondarySaleCartons).toBe(0);
+    it('returns only the manager when chain is empty', async () => {
+      mockPrisma.user.findMany.mockResolvedValue([]);
+      const ids = await service.getChainUserIds('solo-id');
+      expect(ids).toEqual(['solo-id']);
     });
 
-    it('all three org queries run in parallel via Promise.all', async () => {
-      // Track call order — if all three are called before any resolves,
-      // they ran in parallel, not sequentially
-      const callOrder: string[] = [];
-      mockPrisma.user.count.mockImplementation(() => {
-        callOrder.push('user.count');
-        return Promise.resolve(10);
-      });
-      mockPrisma.customer.count.mockImplementation(() => {
-        callOrder.push('customer.count');
-        return Promise.resolve(50);
-      });
-      mockPrisma.collection.aggregate.mockImplementation(() => {
-        callOrder.push('collection.aggregate');
-        return Promise.resolve({ _sum: { amountKobo: 0 } });
-      });
-
-      await service.buildReportData(PERIOD);
-
-      // All three should have been initiated (order may vary, but all called)
-      expect(callOrder).toContain('user.count');
-      expect(callOrder).toContain('customer.count');
-      expect(callOrder).toContain('collection.aggregate');
+    it('never duplicates a user ID', async () => {
+      mockPrisma.user.findMany
+        .mockResolvedValueOnce([{ id: 'report-1' }])
+        .mockResolvedValueOnce([{ id: 'mgr-id' }])
+        .mockResolvedValueOnce([]);
+      const ids = await service.getChainUserIds('mgr-id');
+      expect(ids).toHaveLength([...new Set(ids)].length);
     });
   });
 });

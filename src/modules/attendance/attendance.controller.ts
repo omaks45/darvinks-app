@@ -1,4 +1,4 @@
-// src/modules/attendance/attendance.controller.ts
+
 import {
   Body,
   Controller,
@@ -89,11 +89,16 @@ export class AttendanceController {
 
   @Post('kd-visit')
   @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({ summary: 'Log a KD visit (Tier 1 only)' })
+  @ApiOperation({
+    summary:     'Log KD visit arrival (Tier 1–4)',
+    description: 'Records that the field agent has arrived at a KD location. ' +
+                 'Call POST /attendance/kd-visit/end when the agent leaves. ' +
+                 'Both endpoints require a selfie photo and GPS coordinates.',
+  })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(
     FileInterceptor('photo', {
-      limits: { fileSize: MAX_ATTENDANCE_PHOTO_BYTES },
+      limits:     { fileSize: MAX_ATTENDANCE_PHOTO_BYTES },
       fileFilter: attendancePhotoFilter,
     }),
   )
@@ -103,6 +108,35 @@ export class AttendanceController {
     @UploadedFile() photo: Express.Multer.File,
   ) {
     return this.attendanceService.recordKdVisit(user, dto, photo);
+  }
+
+  @Post('kd-visit/end')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary:     'Log KD visit departure (Tier 1–4)',
+    description:
+      'Records that the field agent has left the KD location. ' +
+      'Must be called after POST /attendance/kd-visit for the same KD and same day. ' +
+      'The server validates that an open arrival record exists for this KD today before creating the departure record. ' +
+      'The frontend pairs the arrival (KD_VISIT) and departure (KD_VISIT_END) records ' +
+      'by matching kdAccountId + date to calculate visit duration.',
+  })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(
+    FileInterceptor('photo', {
+      limits:     { fileSize: MAX_ATTENDANCE_PHOTO_BYTES },
+      fileFilter: attendancePhotoFilter,
+    }),
+  )
+  @ApiResponse({ status: 201, description: 'KD visit departure recorded' })
+  @ApiResponse({ status: 400, description: 'No open KD visit found for this KD today, or already ended' })
+  @ApiResponse({ status: 403, description: 'Only field agents (Tier 1–4) can log KD visits' })
+  endKdVisit(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: KdVisitDto,
+    @UploadedFile() photo: Express.Multer.File,
+  ) {
+    return this.attendanceService.endKdVisit(user, dto, photo);
   }
 
   @Post('sync')

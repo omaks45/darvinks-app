@@ -11,7 +11,8 @@ import { ProductService } from '@modules/products/products.service';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type { CreateCollectionDto, CollectionQueryDto } from './dto/collection.dto';
 
-const ADMIN_TIERS = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD', 'TIER6_GM', 'WAREHOUSE_ADMIN'];
+const ADMIN_TIERS  = ['TIER5_SALES_SUPPORT', 'TIER5_FIELD_SUPPORT', 'TIER5_SALES_HEAD', 'TIER6_GM', 'WAREHOUSE_ADMIN'];
+const FIELD_TIERS  = ['TIER1', 'TIER2', 'TIER3', 'TIER4'];
 
 const COLLECTION_SELECT = {
   id:           true,
@@ -80,15 +81,29 @@ export class CollectionService {
   // ── Read ───────────────────────────────────────────────────────────────────
 
   async findAll(query: CollectionQueryDto, requester: JwtPayload) {
-    const isAdmin = ADMIN_TIERS.includes(requester.tier as string);
+    const isAdmin     = ADMIN_TIERS.includes(requester.tier as string);
+    const isFieldTier = FIELD_TIERS.includes(requester.tier as string);
 
-    // Date range filter
+    // Build the user ID filter:
+    // - Admin tiers    → see all (no filter)
+    // - Tier 1         → only their own
+    // - Tier 2, 3, 4   → their own + everyone under them in their reporting chain
+    let userIdFilter: string[] | undefined;
+
+    if (!isAdmin) {
+      if (requester.tier === 'TIER1') {
+        userIdFilter = [requester.sub];
+      } else {
+        // Collect all user IDs in this manager's downward chain
+        userIdFilter = await this.getChainUserIds(requester.sub);
+      }
+    }
+
     const dateFilter = this.buildDateFilter(query.from, query.to);
 
     return this.prisma.collection.findMany({
       where: {
-        // Field staff see only their own collections
-        ...(isAdmin ? {} : { recordedById: requester.sub }),
+        ...(userIdFilter ? { recordedById: { in: userIdFilter } } : {}),
         ...(query.customerId  ? { customerId:  query.customerId }  : {}),
         ...(query.paymentMode ? { paymentMode: query.paymentMode } : {}),
         ...(dateFilter        ? { collectedAt: dateFilter }        : {}),
@@ -96,6 +111,32 @@ export class CollectionService {
       select:  COLLECTION_SELECT,
       orderBy: { collectedAt: 'desc' },
     });
+  }
+
+  /**
+   * Walks the reportsTo chain downward from a manager and returns
+   * all user IDs in their subtree (including the manager themselves).
+   * Uses iterative BFS to avoid deep recursion.
+   */
+  private async getChainUserIds(managerId: string): Promise<string[]> {
+    const visited = new Set<string>([managerId]);
+    const queue   = [managerId];
+
+    while (queue.length > 0) {
+      const current  = queue.shift()!;
+      const reports  = await this.prisma.user.findMany({
+        where:  { reportsToId: current, isActive: true },
+        select: { id: true },
+      });
+      for (const u of reports) {
+        if (!visited.has(u.id)) {
+          visited.add(u.id);
+          queue.push(u.id);
+        }
+      }
+    }
+
+    return Array.from(visited);
   }
 
   async findById(id: string, requester: JwtPayload) {

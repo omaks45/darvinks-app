@@ -1,10 +1,11 @@
-
+// src/modules/analytics/analytics.service.ts
+//
 // Central data aggregation layer for the weekly analytics report.
 // Separated from generation (PPT/Excel) so both the scheduled job and
 // the on-demand download endpoint share one source of truth for numbers.
 // Never modifies data — reads only.
 
-import { Injectable, Logger } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { TargetCategory } from '@prisma/client';
 
@@ -420,5 +421,260 @@ export class AnalyticsService {
       totalPOValueKobo:           Number(poAgg._sum.totalKobo              ?? 0),
       totalSecondarySaleCartons:  Number(ssAgg._sum.quantityCartons        ?? 0),
     };
+  }
+
+  // ── Personal / chain analytics summary ─────────────────────────────────────
+
+  /**
+   * Returns dashboard analytics for a specific user or for a manager's chain.
+   * Used by GET /analytics/summary and the field-staff dashboard analytics block.
+   *
+   * periodType: 'weekly' | 'monthly' | 'quarterly' | 'annual'
+   * period:     '2026-W35' | '2026-08' | '2026-Q3' | '2026'
+   * targetUserId: when provided by a manager, returns that user's data.
+   *              When omitted, returns the requester's own data.
+   * includeChain: when true, includes data for all users in the reporting chain.
+   */
+  async getPersonalAnalytics(
+    requester:    { sub: string; tier: string },
+    period:       string,
+    periodType:   'weekly' | 'monthly' | 'quarterly' | 'annual',
+    targetUserId?: string,
+    includeChain?: boolean,
+  ) {
+    // Resolve which user IDs to include
+    let userIds: string[];
+
+    if (targetUserId) {
+      // Manager requesting a specific subordinate's data
+      // Validate requester is actually above this user
+      await this.assertIsAbove(requester.sub, targetUserId);
+      userIds = includeChain
+        ? await this.getChainUserIds(targetUserId)
+        : [targetUserId];
+    } else {
+      userIds = includeChain
+        ? await this.getChainUserIds(requester.sub)
+        : [requester.sub];
+    }
+
+    const { startDate, endDate } = this.resolveDateRange(period, periodType);
+
+    const [
+      // Total amount received = collections + secondary invoice payments
+      collections,
+      secondaryInvoices,
+      // Total SKU sold = secondary sale items + PO items delivered
+      secondarySaleItems,
+      poItems,
+      // New secondary customers created in period
+      newSecondaryCustomers,
+      // All customers owned by these users
+      totalPrimaryCustomers,
+      totalSecondaryCustomers,
+      // Target performance
+      targets,
+      // Daily breakdown for bar chart
+      dailySecondaryItems,
+      // Product breakdown for pie/donut chart
+      productBreakdown,
+    ] = await Promise.all([
+
+      this.prisma.collection.aggregate({
+        where: { recordedById: { in: userIds }, collectedAt: { gte: startDate, lt: endDate } },
+        _sum:  { amountKobo: true },
+      }),
+
+      this.prisma.secondarySaleInvoice.aggregate({
+        where: { soldById: { in: userIds }, createdAt: { gte: startDate, lt: endDate } },
+        _sum:  { totalKobo: true },
+        _count: { id: true },
+      }),
+
+      this.prisma.secondarySaleInvoice.findMany({
+        where:  { soldById: { in: userIds }, createdAt: { gte: startDate, lt: endDate } },
+        select: { id: true, totalKobo: true, items: { select: { productId: true, quantityCartons: true, lineTotalKobo: true, createdAt: true } } },
+      }),
+
+      this.prisma.purchaseOrder.findMany({
+        where: {
+          createdById: { in: userIds },
+          createdAt:   { gte: startDate, lt: endDate },
+          status:      { notIn: ['PENDING_APPROVAL', 'CANCELLED'] },
+        },
+        select: {
+          totalKobo: true,
+          items:     { select: { productId: true, quantityCartons: true, lineTotalKobo: true } },
+        },
+      }),
+
+      this.prisma.customer.count({
+        where: { ownerId: { in: userIds }, customerType: 'SECONDARY', createdAt: { gte: startDate, lt: endDate } },
+      }),
+
+      this.prisma.customer.count({
+        where: { ownerId: { in: userIds }, customerType: 'PRIMARY', isActive: true },
+      }),
+
+      this.prisma.customer.count({
+        where: { ownerId: { in: userIds }, customerType: 'SECONDARY', isActive: true },
+      }),
+
+      // Targets for this period
+      this.prisma.targetAssignment.findMany({
+        where:  { assignedToId: { in: userIds }, period: periodType.toUpperCase() as any, year: startDate.getFullYear() },
+        select: { category: true, targetCartons: true, assignedToId: true },
+      }),
+
+      // Daily breakdown — secondary sale items
+      this.prisma.secondarySaleInvoice.findMany({
+        where:  { soldById: { in: userIds }, createdAt: { gte: startDate, lt: endDate } },
+        select: { createdAt: true, items: { select: { lineTotalKobo: true } } },
+      }),
+
+      // Product breakdown for pie chart
+      this.prisma.secondarySaleInvoice.findMany({
+        where:  { soldById: { in: userIds }, createdAt: { gte: startDate, lt: endDate } },
+        select: { items: { select: { productId: true, quantityCartons: true } } },
+      }),
+    ]);
+
+    // ── Aggregate secondary sale items ──────────────────────────────────────
+    const allSaleItems = secondaryInvoices._count.id > 0
+      ? secondarySaleItems.flatMap((inv: any) => inv.items)
+      : [];
+
+    const allPoItems = poItems.flatMap((po: any) => po.items);
+
+    // Total SKU cartons sold (secondary) + PO cartons (delivered)
+    const totalSKUSold =
+      allSaleItems.reduce((s: number, i: any) => s + i.quantityCartons, 0) +
+      allPoItems.reduce((s: number, i: any)   => s + i.quantityCartons, 0);
+
+    // Total sales value
+    const totalSalesKobo =
+      Number(secondaryInvoices._sum.totalKobo ?? 0) +
+      poItems.reduce((s: number, po: any) => s + Number(po.totalKobo ?? 0), 0);
+
+    // Total amount received = collections + secondary invoice total
+    const totalAmountReceivedKobo =
+      Number(collections._sum.amountKobo ?? 0) +
+      Number(secondaryInvoices._sum.totalKobo ?? 0);
+
+    // ── Daily bar chart ─────────────────────────────────────────────────────
+    const DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+    const dailyTotals: Record<string, number> = {};
+    DAYS.forEach(d => { dailyTotals[d] = 0; });
+    for (const inv of dailySecondaryItems as any[]) {
+      const day = DAYS[new Date(inv.createdAt).getDay()];
+      const invTotal = (inv.items ?? []).reduce((s: number, i: any) => s + Number(i.lineTotalKobo ?? 0), 0);
+      dailyTotals[day] = (dailyTotals[day] ?? 0) + invTotal;
+    }
+    const salesOverview = DAYS.map(day => ({ day, totalKobo: dailyTotals[day] }));
+
+    // ── Product breakdown (pie chart) ───────────────────────────────────────
+    const productMap = new Map<string, number>();
+    for (const inv of productBreakdown as any[]) {
+      for (const item of (inv.items ?? [])) {
+        productMap.set(item.productId, (productMap.get(item.productId) ?? 0) + item.quantityCartons);
+      }
+    }
+    const productIds  = Array.from(productMap.keys());
+    const products    = productIds.length > 0
+      ? await this.prisma.product.findMany({ where: { id: { in: productIds } }, select: { id: true, name: true, category: true, imageUrl: true } })
+      : [];
+    const prodNameMap = new Map(products.map((p: any) => [p.id, p]));
+    const totalSKUForPct = Array.from(productMap.values()).reduce((s, v) => s + v, 0);
+    const productBreakdownResult = Array.from(productMap.entries())
+      .map(([productId, qty]) => {
+        const p = prodNameMap.get(productId);
+        return {
+          productId,
+          name:           p?.name     ?? 'Unknown',
+          category:       p?.category ?? null,
+          imageUrl:       p?.imageUrl ?? null,
+          cartonsSOld:    qty,
+          percentOfTotal: totalSKUForPct > 0 ? Math.round((qty / totalSKUForPct) * 100) : 0,
+        };
+      })
+      .sort((a, b) => b.cartonsSOld - a.cartonsSOld);
+
+    // ── Target summary ──────────────────────────────────────────────────────
+    const targetSummary = targets.map((t: any) => ({
+      category:      t.category,
+      targetCartons: t.targetCartons,
+      // achievedCartons is derived from sale items — aggregate per category
+      achievedCartons: allSaleItems
+        .filter((i: any) => {
+          const p = prodNameMap.get(i.productId);
+          return p?.category === t.category;
+        })
+        .reduce((s: number, i: any) => s + i.quantityCartons, 0),
+    })).map((t: any) => ({
+      ...t,
+      balanceCartons:  t.targetCartons - t.achievedCartons,
+      percentAchieved: t.targetCartons > 0 ? Math.round((t.achievedCartons / t.targetCartons) * 100) : 0,
+    }));
+
+    return {
+      period,
+      periodType,
+      userIds,
+      // Summary cards
+      totalAmountReceivedKobo,
+      totalSalesKobo,
+      totalSKUSold,
+      newSecondaryCustomers,
+      // Customer ownership totals
+      customers: {
+        primary:   totalPrimaryCustomers,
+        secondary: totalSecondaryCustomers,
+        total:     totalPrimaryCustomers + totalSecondaryCustomers,
+      },
+      // Target performance per category
+      targetSummary,
+      // Bar chart — daily sales totals
+      salesOverview,
+      // Pie/donut chart — product breakdown
+      productBreakdown: productBreakdownResult,
+    };
+  }
+
+  /**
+   * Walks the reportsTo chain downward from a manager and returns
+   * all user IDs in their subtree (including the manager themselves).
+   */
+  async getChainUserIds(managerId: string): Promise<string[]> {
+    const visited = new Set<string>([managerId]);
+    const queue   = [managerId];
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const reports = await this.prisma.user.findMany({
+        where:  { reportsToId: current, isActive: true },
+        select: { id: true },
+      });
+      for (const u of reports) {
+        if (!visited.has(u.id)) {
+          visited.add(u.id);
+          queue.push(u.id);
+        }
+      }
+    }
+
+    return Array.from(visited);
+  }
+
+  /**
+   * Validates that the requester is above the target user in the
+   * reporting chain. Throws ForbiddenException if not.
+   */
+  private async assertIsAbove(requesterId: string, targetUserId: string): Promise<void> {
+    const chain = await this.getChainUserIds(requesterId);
+    if (!chain.includes(targetUserId)) {
+      throw new ForbiddenException(
+        'You can only view analytics for users in your reporting chain',
+      );
+    }
   }
 }

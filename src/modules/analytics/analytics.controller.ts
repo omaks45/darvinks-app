@@ -6,6 +6,8 @@ import { Response } from 'express';
 import {
   ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags,
 } from '@nestjs/swagger';
+import { IsEnum, IsOptional, IsString, Matches } from 'class-validator';
+import { ApiPropertyOptional } from '@nestjs/swagger';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
@@ -15,13 +17,13 @@ import { AnalyticsScheduler } from './jobs/analytics.scheduler';
 
 // PPT: all tiers access the download. Field staff get personal scope,
 // privileged tiers get org-wide scope.
-const ORG_SCOPE_TIERS = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD', 'TIER6_GM'];
+const ORG_SCOPE_TIERS = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD', 'TIER6_GM'];
 
 // Excel: System Admin and Sales Head only. GM confirmed excluded.
 // Rationale: Excel contains full row-level user data that GM does not
 // need — GM's dashboard and the PPT org summary already give them the
 // aggregate picture they need.
-const EXCEL_TIERS = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD'];
+const EXCEL_TIERS = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD'];
 
 type PeriodType = 'weekly' | 'monthly' | 'quarterly' | 'annual';
 
@@ -86,16 +88,45 @@ export class AnalyticsController {
       'weekly: "2026-W30" | monthly: "2026-07" | quarterly: "2026-Q2" | annual: "2026". ' +
       'Defaults to the current period.',
   })
+  @ApiQuery({
+    name: 'userId', required: false,
+    description: 'Download a specific subordinate\'s PPT report. Requester must be above this user in their reporting chain.',
+  })
   async downloadPpt(
     @Query('periodType') periodType: PeriodType = 'monthly',
     @Query('period')     period: string | undefined,
+    @Query('userId')     targetUserId: string | undefined,
     @CurrentUser()       user: JwtPayload,
     @Res()               res: Response,
   ) {
     const resolvedType   = this.normalizePeriodType(periodType);
     const resolvedPeriod = period ?? PERIOD_DEFAULTS[resolvedType]();
-    const scope = ORG_SCOPE_TIERS.includes(user.tier as string) ? 'org' : 'personal';
 
+    // If a specific userId is requested, validate the requester is above them
+    // then build a chain-scoped report for that user
+    if (targetUserId) {
+      const data = await this.analyticsService.getPersonalAnalytics(
+        user,
+        resolvedPeriod,
+        resolvedType,
+        targetUserId,
+        false, // single user report
+      );
+      // Use the personal analytics data to generate a targeted PPT
+      const reportData = await this.analyticsService.buildReportData(resolvedPeriod, resolvedType);
+      const buffer     = await this.reportGenerator.generatePpt(reportData, 'personal', targetUserId);
+      const filename   = `darvinks-${resolvedType}-${resolvedPeriod}-user-report.pptx`;
+      const pptBuffer  = Buffer.isBuffer(buffer) ? buffer : Buffer.from(buffer as ArrayBuffer);
+      res.set({
+        'Content-Type':        'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+        'Content-Disposition': `attachment; filename="${filename}"`,
+        'Content-Length':      pptBuffer.length,
+        'Cache-Control':       'no-cache',
+      });
+      return res.end(pptBuffer);
+    }
+
+    const scope  = ORG_SCOPE_TIERS.includes(user.tier as string) ? 'org' : 'personal';
     const data   = await this.analyticsService.buildReportData(resolvedPeriod, resolvedType);
     const buffer = await this.reportGenerator.generatePpt(data, scope, user.sub);
 
@@ -177,7 +208,7 @@ export class AnalyticsController {
     @Query('periodType') periodType: PeriodType = 'monthly',
     @CurrentUser()       user: JwtPayload,
   ) {
-    if (user.tier !== 'TIER5_SALES_SUPPORT') {
+    if ((user.tier as string) !== 'TIER5_SYSTEM_ADMIN') {
       throw new ForbiddenException('Only System Admin can manually trigger reports');
     }
     const resolvedType   = this.normalizePeriodType(periodType);
@@ -186,6 +217,49 @@ export class AnalyticsController {
     return {
       message: `Report generation queued — ${resolvedType}: ${resolvedPeriod}`,
     };
+  }
+
+  // ── Personal / chain analytics summary ─────────────────────────────────────
+
+  @Get('summary')
+  @UseGuards(JwtAuthGuard)
+  @ApiBearerAuth('access-token')
+  @ApiOperation({
+    summary: 'Personal analytics summary — bar chart, pie chart, totals',
+    description:
+      'Returns all analytics data for the field-staff dashboard: ' +
+      'total amount received (collections + invoice payments), total SKU sold, ' +
+      'new secondary customers, target summary per category, ' +
+      'daily sales bar chart (Sun–Sat), product breakdown pie chart, ' +
+      'and customer ownership counts. ' +
+      '\n\nA manager can request a subordinate\'s data by passing ?userId=:id. ' +
+      'Passing ?includeChain=true includes all users in the reporting chain below the target. ' +
+      '\n\nPeriod types: weekly (2026-W35), monthly (2026-08), quarterly (2026-Q3), annual (2026).',
+  })
+  @ApiQuery({ name: 'periodType', required: false, enum: ['weekly', 'monthly', 'quarterly', 'annual'], description: 'Defaults to monthly' })
+  @ApiQuery({ name: 'period',     required: false, description: 'Period string — 2026-08 / 2026-W35 / 2026-Q3 / 2026' })
+  @ApiQuery({ name: 'userId',     required: false, description: 'View a specific subordinate\'s analytics. Requester must be above this user in the chain.' })
+  @ApiQuery({ name: 'includeChain', required: false, type: Boolean, description: 'When true, aggregates data for all users in the chain below userId (or requester if userId omitted)' })
+  async getSummary(
+    @Query('periodType')    periodType: PeriodType = 'monthly',
+    @Query('period')        period: string | undefined,
+    @Query('userId')        userId: string | undefined,
+    @Query('includeChain')  includeChain: string | undefined,
+    @CurrentUser()          user: JwtPayload,
+    @Res()                  res: Response,
+  ) {
+    const resolvedType   = this.normalizePeriodType(periodType);
+    const resolvedPeriod = period ?? PERIOD_DEFAULTS[resolvedType]();
+
+    const data = await this.analyticsService.getPersonalAnalytics(
+      user,
+      resolvedPeriod,
+      resolvedType,
+      userId,
+      includeChain === 'true',
+    );
+
+    return res.json({ success: true, data, timestamp: new Date().toISOString() });
   }
 
   // ── Helper ─────────────────────────────────────────────────────────────────
