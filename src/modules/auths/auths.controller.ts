@@ -20,16 +20,15 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
-import { CurrentUser } from '@common/decorators/current-user.decorator';
-import type { JwtPayload } from './strategies/jwt.strategies';
-import { AuthService } from './auths.service';
-import { RegisterDto } from './dto/register.dto';
-import {
-  ForgotPasswordDto } from './dto/forgot-password.dto';
-import { ResetPasswordDto } from './dto/reset-password.dto';
-import { VerifyOtpDto } from './dto/verify-dto';
-import { AdminService } from '../admin/admin.service';
+import { JwtAuthGuard, Public } from '@common/guards/jwt-auth.guard';
+import { CurrentUser }          from '@common/decorators/current-user.decorator';
+import type { JwtPayload }      from './strategies/jwt.strategies';
+import { AuthService }          from './auths.service';
+import { RegisterDto }          from './dto/register.dto';
+import { ForgotPasswordDto }    from './dto/forgot-password.dto';
+import { ResetPasswordDto }     from './dto/reset-password.dto';
+import { VerifyOtpDto }         from './dto/verify-dto';
+import { AdminService }         from '../admin/admin.service';
 import { RegisterWithInviteDto } from './dto/register-invite.dto';
 import {
   AuthTokensResponse,
@@ -38,7 +37,7 @@ import {
   RefreshTokenDto,
   RegisterResponse,
 } from './dto/auth.dto';
-import { ChangePasswordDto } from './dto/change-password.dto';
+import { ChangePasswordDto }    from './dto/change-password.dto';
 import { imageFileFilter, MAX_PROFILE_PICTURE_BYTES } from './auths.constant';
 
 @ApiTags('Authentication')
@@ -52,6 +51,7 @@ export class AuthController {
   // ─── GET /auth/roles ───────────────────────────────────────────────────────
 
   @Get('roles')
+  @Public()
   @ApiOperation({
     summary: 'List all selectable roles',
     description:
@@ -82,6 +82,7 @@ export class AuthController {
   // ─── POST /auth/register ───────────────────────────────────────────────────
 
   @Post('register')
+  @Public()
   @ApiOperation({
     summary: 'Register a new user',
     description:
@@ -170,6 +171,7 @@ export class AuthController {
   // ─── POST /auth/login ──────────────────────────────────────────────────────
 
   @Post('login')
+  @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Login',
@@ -230,6 +232,7 @@ export class AuthController {
   // ─── POST /auth/refresh ────────────────────────────────────────────────────
 
   @Post('refresh')
+  @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Refresh token',
@@ -276,6 +279,7 @@ export class AuthController {
   // ─── POST /auth/logout ─────────────────────────────────────────────────────
 
   @Post('logout')
+  @Public()
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: 'Logout',
@@ -295,6 +299,7 @@ export class AuthController {
   }
 
   // ─── POST /auth/change-password ────────────────────────────────────────────
+  // No @Public() — requires a valid JWT (user must be logged in)
 
   @Post('change-password')
   @HttpCode(HttpStatus.NO_CONTENT)
@@ -350,9 +355,11 @@ export class AuthController {
       dto.newPassword,
     );
   }
+
   // ── Forgot password ────────────────────────────────────────────────────────
 
   @Post('forgot-password')
+  @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Request a password reset OTP',
@@ -367,6 +374,7 @@ export class AuthController {
   }
 
   @Post('verify-otp')
+  @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Verify a password reset OTP',
@@ -378,6 +386,7 @@ export class AuthController {
   }
 
   @Post('reset-password')
+  @Public()
   @HttpCode(HttpStatus.NO_CONTENT)
   @ApiOperation({
     summary: 'Reset password using OTP',
@@ -393,6 +402,7 @@ export class AuthController {
   // ── Invite-based registration ──────────────────────────────────────────────
 
   @Get('invite/:token')
+  @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
     summary: 'Validate an invite token',
@@ -405,6 +415,7 @@ export class AuthController {
   }
 
   @Post('register/invite')
+  @Public()
   @HttpCode(HttpStatus.CREATED)
   @UseInterceptors(FileInterceptor('profilePicture'))
   @ApiOperation({
@@ -421,5 +432,4 @@ export class AuthController {
   ) {
     return this.authService.registerWithInvite(dto, profilePicture);
   }
-
 }
