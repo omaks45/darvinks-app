@@ -1,4 +1,4 @@
-// src/app.module.ts
+
 import * as dotenv from 'dotenv';
 dotenv.config(); // Load .env BEFORE anything else runs
 
