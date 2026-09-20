@@ -3,6 +3,7 @@ import * as dotenv from 'dotenv';
 dotenv.config(); // Load .env BEFORE anything else runs
 
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { BullModule } from '@nestjs/bull';
 
@@ -13,6 +14,9 @@ import { validateEnv } from '@common/config/env.validation';
 import { PrismaModule } from '@common/prisma/prisma.module';
 import { CloudinaryModule } from '@modules/cloudinary/cloudinary.module';
 import { TokensModule } from '@modules/tokens/tokens.module';
+
+import { JwtAuthGuard }  from '@common/guards/jwt-auth.guard';
+import { ClockInGuard }  from '@common/guards/clock-in.guard';
 
 import { AuthModule } from '@modules/auths/auths.module';
 import { AdminModule } from '@modules/admin/admin.module';
@@ -103,6 +107,16 @@ function parsedRedisUrl() {
     LocationModule,
     LocationTargetModule,
     AnalyticsModule,
+  ],
+  providers: [
+    // ── Global guards (execution order = declaration order) ────────────────
+    // 1. JwtAuthGuard  — validates the Bearer token and populates request.user
+    // 2. ClockInGuard  — blocks TIER1–TIER4 users who haven't clocked in today;
+    //                    reads request.user set by JwtAuthGuard above.
+    //    Use @SkipClockInCheck() on any endpoint that must be reachable before
+    //    clock-in (clock-in itself, today-status, offline-sync, clock-out).
+    { provide: APP_GUARD, useClass: JwtAuthGuard },
+    { provide: APP_GUARD, useClass: ClockInGuard },
   ],
 })
 export class AppModule {}

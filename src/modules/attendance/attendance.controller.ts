@@ -1,4 +1,4 @@
-// src/modules/attendance/attendance.controller.ts
+
 import {
   Body,
   Controller,
@@ -24,9 +24,10 @@ import {
   ApiTags,
 } from '@nestjs/swagger';
 
-import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
-import { CurrentUser } from '@common/decorators/current-user.decorator';
-import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
+import { JwtAuthGuard }     from '@common/guards/jwt-auth.guard';
+import { SkipClockInCheck } from '@common/guards/clock-in.guard';
+import { CurrentUser }      from '@common/decorators/current-user.decorator';
+import type { JwtPayload }  from '@modules/auths/strategies/jwt.strategies';
 import { attendancePhotoFilter } from '@modules/auths/auths.constant';
 import { AttendanceService } from './attendance.service';
 import {
@@ -46,8 +47,11 @@ export class AttendanceController {
   constructor(private readonly attendanceService: AttendanceService) {}
 
   // ─── Clock In ─────────────────────────────────────────────────────────────
+  // @SkipClockInCheck — this IS the action that satisfies the guard; must be
+  // reachable before any clock-in exists for today.
 
   @Post('clock-in')
+  @SkipClockInCheck()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Submit clock-in (GPS photo mandatory, gallery blocked)' })
   @ApiConsumes('multipart/form-data')
@@ -70,8 +74,12 @@ export class AttendanceController {
   }
 
   // ─── Clock Out ────────────────────────────────────────────────────────────
+  // @SkipClockInCheck — clock-out is valid after clock-in; the guard would
+  // pass anyway, but skipping avoids the extra DB lookup since the service
+  // already asserts a prior clock-in exists.
 
   @Post('clock-out')
+  @SkipClockInCheck()
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Submit clock-out (GPS photo mandatory)' })
   @ApiConsumes('multipart/form-data')
@@ -92,91 +100,12 @@ export class AttendanceController {
     return this.attendanceService.clockOut(user, dto, photo);
   }
 
-  // ─── KD Visit Arrival ─────────────────────────────────────────────────────
-
-  @Post('kd-visit')
-  @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({
-    summary: 'Log KD visit arrival (Tier 1–4)',
-    description:
-      'Records that the field agent has arrived at a KD location. ' +
-      'Call POST /attendance/kd-visit/end when the agent leaves. ' +
-      'Both endpoints require a selfie photo and GPS coordinates.',
-  })
-  @ApiConsumes('multipart/form-data')
-  @UseInterceptors(
-    FileInterceptor('photo', {
-      limits: { fileSize: MAX_ATTENDANCE_PHOTO_BYTES },
-      fileFilter: attendancePhotoFilter,
-    }),
-  )
-  @ApiResponse({ status: 201, description: 'KD visit arrival recorded' })
-  @ApiResponse({ status: 400, description: 'Open visit already exists for this KD today' })
-  @ApiResponse({ status: 403, description: 'Only field agents (Tier 1–4) can log KD visits' })
-  recordKdVisit(
-    @CurrentUser() user: JwtPayload,
-    @Body() dto: KdVisitDto,
-    @UploadedFile() photo: Express.Multer.File,
-  ) {
-    return this.attendanceService.recordKdVisit(user, dto, photo);
-  }
-
-  // ─── KD Visit Departure ───────────────────────────────────────────────────
-
-  @Post('kd-visit/end')
-  @HttpCode(HttpStatus.CREATED)
-  @ApiOperation({
-    summary: 'Log KD visit departure (Tier 1–4)',
-    description:
-      'Records that the field agent has left the KD location. ' +
-      'Must be called after POST /attendance/kd-visit for the same KD and same day. ' +
-      'The server validates that an open arrival record exists for this KD today before creating the departure record. ' +
-      'The frontend pairs the arrival (KD_VISIT) and departure (KD_VISIT_END) records ' +
-      'by matching kdAccountId + date to calculate visit duration.',
-  })
-  @ApiConsumes('multipart/form-data')
-  @UseInterceptors(
-    FileInterceptor('photo', {
-      limits: { fileSize: MAX_ATTENDANCE_PHOTO_BYTES },
-      fileFilter: attendancePhotoFilter,
-    }),
-  )
-  @ApiResponse({ status: 201, description: 'KD visit departure recorded' })
-  @ApiResponse({ status: 400, description: 'No open KD visit found for this KD today, or already ended' })
-  @ApiResponse({ status: 403, description: 'Only field agents (Tier 1–4) can log KD visits' })
-  endKdVisit(
-    @CurrentUser() user: JwtPayload,
-    @Body() dto: KdVisitDto,
-    @UploadedFile() photo: Express.Multer.File,
-  ) {
-    return this.attendanceService.endKdVisit(user, dto, photo);
-  }
-
-  // ─── Offline Batch Sync ───────────────────────────────────────────────────
-
-  @Post('sync')
-  @HttpCode(HttpStatus.OK)
-  @ApiOperation({ summary: 'Offline batch sync — submit queued attendance events' })
-  @ApiConsumes('multipart/form-data')
-  @UseInterceptors(
-    FilesInterceptor('photos', 20, {
-      limits: { fileSize: MAX_ATTENDANCE_PHOTO_BYTES },
-      fileFilter: attendancePhotoFilter,
-    }),
-  )
-  @ApiResponse({ status: 200, description: 'Batch processed. Returns { processed, skipped } counts.' })
-  syncOffline(
-    @CurrentUser() user: JwtPayload,
-    @Body('events') eventsJson: string,
-    @UploadedFiles() photos: Express.Multer.File[],
-  ) {
-    const events: OfflineSyncItemDto[] = JSON.parse(eventsJson);
-    return this.attendanceService.syncOfflineBatch(user, events, photos);
-  }
-
   // ─── Today's Status ───────────────────────────────────────────────────────
+  // @SkipClockInCheck — the mobile app reads this on launch to decide whether
+  // to show the "Clock In" screen; must work before any clock-in exists.
 
   @Get('today')
+  @SkipClockInCheck()
   @ApiOperation({
     summary: "Today's clock-in/out status",
     description:
@@ -219,20 +148,97 @@ export class AttendanceController {
     return this.attendanceService.getTodayStatus(user.sub);
   }
 
-  // ─── List All Attendance Events ───────────────────────────────────────────
+  // ─── KD Visit Arrival ─────────────────────────────────────────────────────
+  // Guard is ACTIVE — user must have clocked in before recording a KD visit.
 
-  /**
-   * GET /attendance
-   *
-   * Lists clock-in / clock-out events with optional filters.
-   *
-   * Scoping:
-   *  - Tier 1–4 (field agents)        → own events only; ?userId is ignored
-   *  - Oversight tiers (FIELD_SUPPORT  → all events; optionally filter by ?userId
-   *    and above)
-   *
-   * Defaults to CLOCK_IN + CLOCK_OUT unless ?type= is provided.
-   */
+  @Post('kd-visit')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Log KD visit arrival (Tier 1–4)',
+    description:
+      'Records that the field agent has arrived at a KD location. ' +
+      'Call POST /attendance/kd-visit/end when the agent leaves. ' +
+      'Both endpoints require a selfie photo and GPS coordinates.',
+  })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(
+    FileInterceptor('photo', {
+      limits: { fileSize: MAX_ATTENDANCE_PHOTO_BYTES },
+      fileFilter: attendancePhotoFilter,
+    }),
+  )
+  @ApiResponse({ status: 201, description: 'KD visit arrival recorded' })
+  @ApiResponse({ status: 400, description: 'Open visit already exists for this KD today' })
+  @ApiResponse({ status: 403, description: 'Clock in first, or only field agents (Tier 1–4) can log KD visits' })
+  recordKdVisit(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: KdVisitDto,
+    @UploadedFile() photo: Express.Multer.File,
+  ) {
+    return this.attendanceService.recordKdVisit(user, dto, photo);
+  }
+
+  // ─── KD Visit Departure ───────────────────────────────────────────────────
+  // Guard is ACTIVE — user must have clocked in before ending a KD visit.
+
+  @Post('kd-visit/end')
+  @HttpCode(HttpStatus.CREATED)
+  @ApiOperation({
+    summary: 'Log KD visit departure (Tier 1–4)',
+    description:
+      'Records that the field agent has left the KD location. ' +
+      'Must be called after POST /attendance/kd-visit for the same KD and same day. ' +
+      'The server validates that an open arrival record exists for this KD today before creating the departure record. ' +
+      'The frontend pairs the arrival (KD_VISIT) and departure (KD_VISIT_END) records ' +
+      'by matching kdAccountId + date to calculate visit duration.',
+  })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(
+    FileInterceptor('photo', {
+      limits: { fileSize: MAX_ATTENDANCE_PHOTO_BYTES },
+      fileFilter: attendancePhotoFilter,
+    }),
+  )
+  @ApiResponse({ status: 201, description: 'KD visit departure recorded' })
+  @ApiResponse({ status: 400, description: 'No open KD visit found for this KD today, or already ended' })
+  @ApiResponse({ status: 403, description: 'Clock in first, or only field agents (Tier 1–4) can log KD visits' })
+  endKdVisit(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: KdVisitDto,
+    @UploadedFile() photo: Express.Multer.File,
+  ) {
+    return this.attendanceService.endKdVisit(user, dto, photo);
+  }
+
+  // ─── Offline Batch Sync ───────────────────────────────────────────────────
+  // @SkipClockInCheck — the batch may itself contain the clock-in event that
+  // was captured offline. Blocking sync until clock-in is present on the
+  // server would create a chicken-and-egg deadlock for offline users.
+
+  @Post('sync')
+  @SkipClockInCheck()
+  @HttpCode(HttpStatus.OK)
+  @ApiOperation({ summary: 'Offline batch sync — submit queued attendance events' })
+  @ApiConsumes('multipart/form-data')
+  @UseInterceptors(
+    FilesInterceptor('photos', 20, {
+      limits: { fileSize: MAX_ATTENDANCE_PHOTO_BYTES },
+      fileFilter: attendancePhotoFilter,
+    }),
+  )
+  @ApiResponse({ status: 200, description: 'Batch processed. Returns { processed, skipped } counts.' })
+  syncOffline(
+    @CurrentUser() user: JwtPayload,
+    @Body('events') eventsJson: string,
+    @UploadedFiles() photos: Express.Multer.File[],
+  ) {
+    const events: OfflineSyncItemDto[] = JSON.parse(eventsJson);
+    return this.attendanceService.syncOfflineBatch(user, events, photos);
+  }
+
+  // ─── List All Attendance Events ───────────────────────────────────────────
+  // Guard is ACTIVE — field agents must clock in before querying records.
+
   @Get()
   @ApiOperation({
     summary: 'List attendance events (clock-in / clock-out)',
@@ -286,14 +292,8 @@ export class AttendanceController {
   }
 
   // ─── KD Visit Pairs ───────────────────────────────────────────────────────
+  // Guard is ACTIVE.
 
-  /**
-   * GET /attendance/kd-visits
-   *
-   * Returns KD_VISIT events each paired with their matching KD_VISIT_END.
-   * visitEnd is null when the agent has not yet ended the visit.
-   * Scoping: field agents see own, oversight roles see all.
-   */
   @Get('kd-visits')
   @ApiOperation({
     summary: 'List KD visit pairs (arrival + departure)',
@@ -357,15 +357,8 @@ export class AttendanceController {
   }
 
   // ─── Single User History ──────────────────────────────────────────────────
+  // Guard is ACTIVE.
 
-  /**
-   * GET /attendance/user/:userId
-   *
-   * Full attendance history for a specific user (all event types).
-   *
-   * - Field agents: only their own userId is accepted (403 if different).
-   * - Oversight roles: any userId.
-   */
   @Get('user/:userId')
   @ApiOperation({
     summary: "Get a specific user's attendance history",
@@ -381,7 +374,7 @@ export class AttendanceController {
   @ApiQuery({ name: 'page',  required: false, type: Number })
   @ApiQuery({ name: 'limit', required: false, type: Number })
   @ApiResponse({ status: 200, description: "Paginated attendance history for the target user" })
-  @ApiResponse({ status: 403, description: 'Field agents cannot view another user\'s attendance' })
+  @ApiResponse({ status: 403, description: "Field agents cannot view another user's attendance, or clock in required" })
   findByUser(
     @Param('userId') userId: string,
     @CurrentUser() user: JwtPayload,
