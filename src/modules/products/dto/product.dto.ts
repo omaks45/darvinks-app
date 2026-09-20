@@ -1,4 +1,3 @@
-
 import { ApiProperty, ApiPropertyOptional, PartialType } from '@nestjs/swagger';
 import {
     IsEnum,
@@ -43,6 +42,16 @@ export class CreateProductDto {
     @IsInt()
     @Min(1)
     cartonPriceKobo: number;
+
+    @ApiProperty({
+        example: 'roll',
+        description: 'Selling-unit label shown next to unitPriceKobo on the mobile UI. ' +
+                        'Values: "box" (CREAM), "roll" (SOAP / most LOTION / BSC Creams), ' +
+                        '"pc" (Cup Cream), "litre" (Shower Gel), "bottle" (Serum Oil).',
+    })
+    @IsString()
+    @IsNotEmpty()
+    unitLabel: string;
 }
 
 export class UpdateProductDto extends PartialType(CreateProductDto) {

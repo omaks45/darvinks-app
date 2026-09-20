@@ -1,4 +1,3 @@
-
 import {
   ConflictException,
   ForbiddenException,
@@ -20,6 +19,7 @@ const PRODUCT_SELECT = {
   packQty:         true,
   unitPriceKobo:   true,
   cartonPriceKobo: true,
+  unitLabel:       true,
   isActive:        true,
   imageUrl:        true,
   createdAt:       true,
@@ -57,6 +57,7 @@ export class ProductService {
         packQty:         dto.packQty,
         unitPriceKobo:   dto.unitPriceKobo,
         cartonPriceKobo: dto.cartonPriceKobo,
+        unitLabel:       dto.unitLabel,
       },
       select: PRODUCT_SELECT,
     });
@@ -133,6 +134,7 @@ export class ProductService {
         ...(dto.packQty         !== undefined ? { packQty:         dto.packQty }         : {}),
         ...(dto.unitPriceKobo   !== undefined ? { unitPriceKobo:   dto.unitPriceKobo }   : {}),
         ...(dto.cartonPriceKobo !== undefined ? { cartonPriceKobo: dto.cartonPriceKobo } : {}),
+        ...(dto.unitLabel       !== undefined ? { unitLabel:       dto.unitLabel }       : {}),
         ...(dto.isActive        !== undefined ? { isActive:        dto.isActive }        : {}),
       },
       select: PRODUCT_SELECT,
