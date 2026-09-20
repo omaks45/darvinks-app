@@ -1,4 +1,3 @@
-
 import {
   BadRequestException,
   ConflictException,
@@ -12,6 +11,7 @@ import { InjectQueue } from '@nestjs/bull';
 import { Queue } from 'bull';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
+import { Prisma, Region, Team, UserRole as PrismaUserRole, UserTier } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { MailService } from '@modules/email/email.service';
 import { labelFromRole, tierFromRole, UserRole } from '@common/utils/role.utils';
@@ -49,6 +49,26 @@ const USER_SAFE_SELECT = {
   createdAt: true,
   updatedAt: true,
 } as const;
+
+// ── Query DTO (inline — avoids creating a separate file if you prefer) ─────────
+export interface FindAllUsersQuery {
+  /** Filter by team */
+  team?: Team;
+  /** Filter by region */
+  region?: Region;
+  /** Filter by role */
+  role?: PrismaUserRole;
+  /** Filter by tier */
+  tier?: UserTier;
+  /** Search by full name, email, or employee ref (case-insensitive) */
+  search?: string;
+  /** true = active only, false = inactive only, omit = both */
+  isActive?: boolean | string;
+  /** Page number (default 1) */
+  page?: number | string;
+  /** Results per page, max 100 (default 20) */
+  limit?: number | string;
+}
 
 @Injectable()
 export class AdminService {
@@ -189,7 +209,6 @@ export class AdminService {
     );
 
     // 12. Queue ID card generation — same as self-registration flow
-    // Tier 5 and 6 provisioned users also receive a digital ID card
     void this.notifyQueue.add(
       'generate-id-card',
       { userId: user.id, roleLabel },
@@ -210,13 +229,75 @@ export class AdminService {
     };
   }
 
-  // ─── Find all users ───────────────────────────────────────────────────────
+  // ─── Find all users (with optional filters) ───────────────────────────────
 
-  async findAllUsers() {
-    return this.prisma.user.findMany({
-      select: USER_SAFE_SELECT,
-      orderBy: { createdAt: 'desc' },
-    });
+  /**
+   * List all users with optional filters.
+   *
+   * Supported query params:
+   *  ?team=BRIGHT|RADIANT
+   *  ?region=<Region enum value>
+   *  ?role=<UserRole enum value>
+   *  ?tier=<UserTier enum value>
+   *  ?search=<string>          — matches fullName, email, employeeRef (case-insensitive)
+   *  ?isActive=true|false      — omit to return both active and inactive
+   *  ?page=1 ?limit=20
+   */
+  async findAllUsers(query: FindAllUsersQuery = {}) {
+    const {
+      team,
+      region,
+      role,
+      tier,
+      search,
+    } = query;
+
+    const page  = Math.max(1, Number(query.page)  || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+
+    const where: Prisma.UserWhereInput = {};
+
+    if (team)   where.team   = team;
+    if (region) where.region = region;
+    if (role)   where.role   = role;
+    if (tier)   where.tier   = tier;
+
+    // Coerce string "true"/"false" that come in via query params
+    if (query.isActive !== undefined && query.isActive !== null && query.isActive !== '') {
+      where.isActive =
+        query.isActive === true || query.isActive === 'true';
+    }
+
+    if (search && search.trim()) {
+      where.OR = [
+        { fullName:    { contains: search.trim(), mode: 'insensitive' } },
+        { email:       { contains: search.trim(), mode: 'insensitive' } },
+        { employeeRef: { contains: search.trim(), mode: 'insensitive' } },
+      ];
+    }
+
+    const skip = (page - 1) * limit;
+
+    const [total, users] = await this.prisma.$transaction([
+      this.prisma.user.count({ where }),
+      this.prisma.user.findMany({
+        where,
+        skip,
+        take: limit,
+        orderBy: { createdAt: 'desc' },
+        select: USER_SAFE_SELECT,
+      }),
+    ]);
+
+    return {
+      data: users,
+      meta: {
+        total,
+        page,
+        limit,
+        totalPages: Math.ceil(total / limit),
+      },
+    };
   }
 
   // ─── Find one user ────────────────────────────────────────────────────────
@@ -372,6 +453,7 @@ export class AdminService {
     }
     return password;
   }
+
   // ── Invite management ──────────────────────────────────────────────────────
 
   async createInvite(
@@ -424,8 +506,6 @@ export class AdminService {
     });
 
     const roleLabel  = labelFromRole(dto.role as any);
-    // The invite URL points to the mobile app deep link or web registration page
-    // Frontend team should configure APP_INVITE_BASE_URL in .env
     const inviteUrl  = `${process.env.APP_INVITE_BASE_URL ?? 'https://app.darvinks.com/register'}?token=${token}`;
 
     // Send invite email — fire and forget
@@ -443,7 +523,6 @@ export class AdminService {
     return {
       message:   `Invite sent to ${dto.email}`,
       expiresAt,
-      // Return token in response so admin can also share it manually if needed
       inviteToken: token,
     };
   }
@@ -461,9 +540,9 @@ export class AdminService {
       },
     });
 
-    if (!invite)              throw new BadRequestException('Invalid invite token');
-    if (invite.isUsed)        throw new BadRequestException('This invite has already been used');
-    if (invite.expiresAt < new Date()) throw new BadRequestException('This invite has expired');
+    if (!invite)                          throw new BadRequestException('Invalid invite token');
+    if (invite.isUsed)                    throw new BadRequestException('This invite has already been used');
+    if (invite.expiresAt < new Date())    throw new BadRequestException('This invite has expired');
 
     return {
       email:             invite.email,
@@ -473,5 +552,4 @@ export class AdminService {
       roleLabel:         labelFromRole(invite.role as any),
     };
   }
-
 }

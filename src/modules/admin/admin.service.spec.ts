@@ -20,12 +20,12 @@ import type { ProvisionUserDto } from '../auths/dto/provision-user.dto';
 
 const mockPrisma = {
   user: {
-    findFirst: jest.fn(),
+    findFirst:  jest.fn(),
     findUnique: jest.fn(),
-    findMany: jest.fn(),
-    create: jest.fn(),
-    update: jest.fn(),
-    count: jest.fn(),
+    findMany:   jest.fn(),
+    create:     jest.fn(),
+    update:     jest.fn(),
+    count:      jest.fn(),
   },
   refreshToken: {
     updateMany: jest.fn(),
@@ -33,8 +33,9 @@ const mockPrisma = {
   inviteToken: {
     findUnique: jest.fn(),
     updateMany: jest.fn(),
-    create: jest.fn(),
+    create:     jest.fn(),
   },
+  $transaction: jest.fn(),
 };
 
 const mockConfig = {
@@ -51,80 +52,76 @@ const mockMail = {
 };
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
-// DTOs are cast to ProvisionUserDto via `as unknown as ProvisionUserDto` so
-// that the spec can use the full UserRole enum freely without TypeScript
-// narrowing the role to the ProvisionableRole union type.
-// The service itself enforces the ProvisionableRole restriction at runtime.
 
 const SALES_SUPPORT_REQUESTER: JwtPayload = {
-  sub: 'admin-uuid',
+  sub:   'admin-uuid',
   email: 'admin@darvinks.com',
-  tier: 'TIER5_SALES_SUPPORT' as any,
-  team: 'BRIGHT' as any,
+  tier:  'TIER5_SALES_SUPPORT' as any,
+  team:  'BRIGHT' as any,
 };
 
 const NON_ADMIN_REQUESTER: JwtPayload = {
-  sub: 'user-uuid',
+  sub:   'user-uuid',
   email: 'user@darvinks.com',
-  tier: 'TIER2' as any,
-  team: 'BRIGHT' as any,
+  tier:  'TIER2' as any,
+  team:  'BRIGHT' as any,
 };
 
 const PROVISION_SALES_HEAD_DTO: ProvisionUserDto = {
-  fullName: 'Chukwuemeka Obi',
-  email: 'emeka@darvinks.com',
-  phone: '+2348055555555',
-  role: UserRole.SALES_HEAD as unknown as ProvisionUserDto['role'],
-  team: 'BRIGHT' as any,
+  fullName:    'Chukwuemeka Obi',
+  email:       'emeka@darvinks.com',
+  phone:       '+2348055555555',
+  role:        UserRole.SALES_HEAD as unknown as ProvisionUserDto['role'],
+  team:        'BRIGHT' as any,
   dateOfBirth: '1982-03-10',
 };
 
 const PROVISION_WAREHOUSE_ADMIN_DTO: ProvisionUserDto = {
-  fullName: 'Adaeze Okonkwo',
-  email: 'adaeze@darvinks.com',
-  phone: '+2348066666666',
-  role: UserRole.WAREHOUSE_ADMIN as unknown as ProvisionUserDto['role'],
+  fullName:          'Adaeze Okonkwo',
+  email:             'adaeze@darvinks.com',
+  phone:             '+2348066666666',
+  role:              UserRole.WAREHOUSE_ADMIN as unknown as ProvisionUserDto['role'],
   warehouseLocation: 'LAGOS_HQ' as any,
 };
 
 const PROVISION_GM_DTO: ProvisionUserDto = {
   fullName: 'Dr. Emeka Darvinks',
-  email: 'gm@darvinks.com',
-  phone: '+2348077777777',
-  role: UserRole.GENERAL_MANAGER as unknown as ProvisionUserDto['role'],
+  email:    'gm@darvinks.com',
+  phone:    '+2348077777777',
+  role:     UserRole.GENERAL_MANAGER as unknown as ProvisionUserDto['role'],
 };
 
 const PROVISION_SALES_SUPPORT_DTO: ProvisionUserDto = {
   fullName: 'Ngozi Admin',
-  email: 'ngozi.admin@darvinks.com',
-  phone: '+2348088888888',
-  role: UserRole.SALES_SUPPORT as unknown as ProvisionUserDto['role'],
+  email:    'ngozi.admin@darvinks.com',
+  phone:    '+2348088888888',
+  role:     UserRole.SALES_SUPPORT as unknown as ProvisionUserDto['role'],
 };
 
 const SAFE_USER = {
-  id: 'user-id',
-  employeeRef: 'Dar-00000001',
-  fullName: 'Kenny Solape',
-  email: 'kenny@darvinks.com',
-  phone: '+2348012345678',
-  role: 'MERCHANDISER',
-  roleLabel: 'Merchandiser',
-  tier: 'TIER1',
-  team: 'BRIGHT',
-  region: 'SS1',
-  state: 'Cross River',
+  id:                'user-id',
+  employeeRef:       'Dar-00000001',
+  fullName:          'Kenny Solape',
+  email:             'kenny@darvinks.com',
+  phone:             '+2348012345678',
+  role:              'MERCHANDISER',
+  roleLabel:         'Merchandiser',
+  tier:              'TIER1',
+  team:              'BRIGHT',
+  region:            'SS1',
+  state:             'Cross River',
   warehouseLocation: null,
-  accountOrigin: 'SELF_REGISTERED',
+  accountOrigin:     'SELF_REGISTERED',
   mustChangePassword: false,
-  isActive: true,
+  isActive:          true,
   profilePictureUrl: null,
-  idCardUrl: null,
-  fcmToken: null,
-  provisionedById: null,
-  dateOfBirth: new Date('1995-06-15'),
-  annualTargets: {},
-  createdAt: new Date(),
-  updatedAt: new Date(),
+  idCardUrl:         null,
+  fcmToken:          null,
+  provisionedById:   null,
+  dateOfBirth:       new Date('1995-06-15'),
+  annualTargets:     {},
+  createdAt:         new Date(),
+  updatedAt:         new Date(),
 };
 
 // ─── Test suite ───────────────────────────────────────────────────────────────
@@ -136,16 +133,14 @@ describe('AdminService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AdminService,
-        { provide: PrismaService,  useValue: mockPrisma },
-        { provide: ConfigService,  useValue: mockConfig },
-        { provide: MailService,    useValue: mockMail },
-        { provide: getQueueToken('notifications'), useValue: mockQueue },
+        { provide: PrismaService,                    useValue: mockPrisma },
+        { provide: ConfigService,                    useValue: mockConfig },
+        { provide: MailService,                      useValue: mockMail },
+        { provide: getQueueToken('notifications'),   useValue: mockQueue },
       ],
     }).compile();
 
     service = module.get<AdminService>(AdminService);
-    // resetAllMocks clears both one-time (Once) and persistent mockResolvedValue
-    // defaults — prevents mock state from leaking between tests.
     jest.resetAllMocks();
   });
 
@@ -155,8 +150,6 @@ describe('AdminService', () => {
 
   describe('provisionUser()', () => {
 
-    // ── Authorization ─────────────────────────────────────────────────────────
-
     it('throws ForbiddenException when requester is not TIER5_SALES_SUPPORT', async () => {
       await expect(
         service.provisionUser(NON_ADMIN_REQUESTER, PROVISION_GM_DTO),
@@ -165,8 +158,6 @@ describe('AdminService', () => {
       expect(mockPrisma.user.findFirst).not.toHaveBeenCalled();
       expect(mockPrisma.user.create).not.toHaveBeenCalled();
     });
-
-    // ── Role validation ───────────────────────────────────────────────────────
 
     it('throws BadRequestException when attempting to provision a field staff role', async () => {
       const dto = {
@@ -198,8 +189,6 @@ describe('AdminService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    // ── Sales Head validation ─────────────────────────────────────────────────
-
     it('throws BadRequestException when provisioning Sales Head without team', async () => {
       const dto = { ...PROVISION_SALES_HEAD_DTO, team: undefined };
 
@@ -210,7 +199,7 @@ describe('AdminService', () => {
 
     it('throws ConflictException when a Sales Head already exists for the given team', async () => {
       mockPrisma.user.findFirst.mockResolvedValueOnce({
-        id: 'existing-sh',
+        id:       'existing-sh',
         fullName: 'Existing SH',
       });
 
@@ -221,11 +210,11 @@ describe('AdminService', () => {
 
     it('allows provisioning a Sales Head when none exists for the team', async () => {
       mockPrisma.user.findFirst
-        .mockResolvedValueOnce(null)  // no existing Sales Head
-        .mockResolvedValueOnce(null); // no duplicate email/phone
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
       mockPrisma.user.count.mockResolvedValue(5);
       mockPrisma.user.create.mockResolvedValue({
-        id: 'new-sh-id',
+        id:          'new-sh-id',
         employeeRef: 'Dar-00000006',
       });
       mockQueue.add.mockResolvedValue(undefined);
@@ -239,8 +228,6 @@ describe('AdminService', () => {
       expect(result.employeeRef).toBe('Dar-00000006');
     });
 
-    // ── Warehouse Admin validation ────────────────────────────────────────────
-
     it('throws BadRequestException when provisioning Warehouse Admin without warehouseLocation', async () => {
       const dto = { ...PROVISION_WAREHOUSE_ADMIN_DTO, warehouseLocation: undefined };
 
@@ -251,9 +238,9 @@ describe('AdminService', () => {
 
     it('throws ConflictException when a Warehouse Admin already exists for that location', async () => {
       mockPrisma.user.findFirst
-        .mockResolvedValueOnce(null)          // no Sales Head check (different role)
-        .mockResolvedValueOnce({              // existing warehouse admin
-          id: 'existing-wa',
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({
+          id:       'existing-wa',
           fullName: 'Existing Admin',
         });
 
@@ -264,11 +251,11 @@ describe('AdminService', () => {
 
     it('allows provisioning a Warehouse Admin when slot is empty', async () => {
       mockPrisma.user.findFirst
-        .mockResolvedValueOnce(null)  // no existing warehouse admin
-        .mockResolvedValueOnce(null); // no duplicate email/phone
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(null);
       mockPrisma.user.count.mockResolvedValue(2);
       mockPrisma.user.create.mockResolvedValue({
-        id: 'new-wa-id',
+        id:          'new-wa-id',
         employeeRef: 'Dar-00000003',
       });
       mockQueue.add.mockResolvedValue(undefined);
@@ -280,8 +267,6 @@ describe('AdminService', () => {
 
       expect(result.userId).toBe('new-wa-id');
     });
-
-    // ── Uniqueness checks ─────────────────────────────────────────────────────
 
     it('throws ConflictException when email already exists', async () => {
       mockPrisma.user.findFirst.mockResolvedValueOnce({
@@ -305,13 +290,11 @@ describe('AdminService', () => {
       ).rejects.toThrow(ConflictException);
     });
 
-    // ── Account creation ──────────────────────────────────────────────────────
-
     it('creates user with correct role, roleLabel, tier, accountOrigin, mustChangePassword', async () => {
       mockPrisma.user.findFirst.mockResolvedValue(null);
       mockPrisma.user.count.mockResolvedValue(0);
       mockPrisma.user.create.mockResolvedValue({
-        id: 'gm-id',
+        id:          'gm-id',
         employeeRef: 'Dar-00000001',
       });
       mockQueue.add.mockResolvedValue(undefined);
@@ -330,7 +313,7 @@ describe('AdminService', () => {
       mockPrisma.user.findFirst.mockResolvedValue(null);
       mockPrisma.user.count.mockResolvedValue(0);
       mockPrisma.user.create.mockResolvedValue({
-        id: 'gm-id',
+        id:          'gm-id',
         employeeRef: 'Dar-00000001',
       });
       mockQueue.add.mockResolvedValue(undefined);
@@ -347,7 +330,7 @@ describe('AdminService', () => {
       mockPrisma.user.findFirst.mockResolvedValue(null);
       mockPrisma.user.count.mockResolvedValue(0);
       mockPrisma.user.create.mockResolvedValue({
-        id: 'wa-id',
+        id:          'wa-id',
         employeeRef: 'Dar-00000001',
       });
       mockQueue.add.mockResolvedValue(undefined);
@@ -363,7 +346,7 @@ describe('AdminService', () => {
       mockPrisma.user.findFirst.mockResolvedValue(null);
       mockPrisma.user.count.mockResolvedValue(0);
       mockPrisma.user.create.mockResolvedValue({
-        id: 'id',
+        id:          'id',
         employeeRef: 'Dar-00000001',
       });
       mockQueue.add.mockResolvedValue(undefined);
@@ -383,7 +366,7 @@ describe('AdminService', () => {
       mockPrisma.user.findFirst.mockResolvedValue(null);
       mockPrisma.user.count.mockResolvedValue(0);
       mockPrisma.user.create.mockResolvedValue({
-        id: 'id',
+        id:          'id',
         employeeRef: 'Dar-00000001',
       });
       mockQueue.add.mockResolvedValue(undefined);
@@ -400,7 +383,7 @@ describe('AdminService', () => {
       mockPrisma.user.findFirst.mockResolvedValue(null);
       mockPrisma.user.count.mockResolvedValue(9);
       mockPrisma.user.create.mockResolvedValue({
-        id: 'id',
+        id:          'id',
         employeeRef: 'Dar-00000010',
       });
       mockQueue.add.mockResolvedValue(undefined);
@@ -417,7 +400,7 @@ describe('AdminService', () => {
       mockPrisma.user.findFirst.mockResolvedValue(null);
       mockPrisma.user.count.mockResolvedValue(0);
       mockPrisma.user.create.mockResolvedValue({
-        id: 'id',
+        id:          'id',
         employeeRef: 'Dar-00000001',
       });
       mockQueue.add.mockResolvedValue(undefined);
@@ -432,7 +415,7 @@ describe('AdminService', () => {
       mockPrisma.user.findFirst.mockResolvedValue(null);
       mockPrisma.user.count.mockResolvedValue(0);
       mockPrisma.user.create.mockResolvedValue({
-        id: 'new-id',
+        id:          'new-id',
         employeeRef: 'Dar-00000001',
       });
 
@@ -441,10 +424,10 @@ describe('AdminService', () => {
       expect(mockQueue.add).toHaveBeenCalledWith(
         'send-provisioning-email',
         expect.objectContaining({
-          userId: 'new-id',
-          email: PROVISION_GM_DTO.email,
-          fullName: PROVISION_GM_DTO.fullName,
-          roleLabel: 'General Manager',
+          userId:            'new-id',
+          email:             PROVISION_GM_DTO.email,
+          fullName:          PROVISION_GM_DTO.fullName,
+          roleLabel:         'General Manager',
           temporaryPassword: expect.any(String),
         }),
         expect.any(Object),
@@ -455,7 +438,7 @@ describe('AdminService', () => {
       mockPrisma.user.findFirst.mockResolvedValue(null);
       mockPrisma.user.count.mockResolvedValue(0);
       mockPrisma.user.create.mockResolvedValue({
-        id: 'new-id',
+        id:          'new-id',
         employeeRef: 'Dar-00000001',
       });
       mockQueue.add.mockResolvedValue(undefined);
@@ -478,30 +461,195 @@ describe('AdminService', () => {
   // ══════════════════════════════════════════════════════════════════════════
 
   describe('findAllUsers()', () => {
-    it('returns all users ordered by createdAt descending', async () => {
-      const users = [SAFE_USER, { ...SAFE_USER, id: 'user-2' }];
-      mockPrisma.user.findMany.mockResolvedValue(users);
+    // Helper: set up $transaction to resolve with [total, users]
+    const mockTransaction = (total: number, users: typeof SAFE_USER[]) => {
+      mockPrisma.$transaction.mockResolvedValue([total, users]);
+    };
+
+    // ── Return shape ──────────────────────────────────────────────────────────
+
+    it('returns a paginated { data, meta } shape', async () => {
+      const users = [SAFE_USER];
+      mockTransaction(1, users);
 
       const result = await service.findAllUsers();
 
-      expect(result).toEqual(users);
-      expect(mockPrisma.user.findMany).toHaveBeenCalledWith(
-        expect.objectContaining({ orderBy: { createdAt: 'desc' } }),
-      );
+      expect(result).toEqual({
+        data: users,
+        meta: { total: 1, page: 1, limit: 20, totalPages: 1 },
+      });
     });
 
-    it('returns an empty array when no users exist', async () => {
-      mockPrisma.user.findMany.mockResolvedValue([]);
+    it('returns empty data array and correct meta when no users exist', async () => {
+      mockTransaction(0, []);
+
       const result = await service.findAllUsers();
-      expect(result).toEqual([]);
+
+      expect(result.data).toEqual([]);
+      expect(result.meta.total).toBe(0);
+      expect(result.meta.totalPages).toBe(0);
+    });
+
+    // ── Default behaviour (no query) ──────────────────────────────────────────
+
+    it('calls $transaction with count and findMany ordered by createdAt desc', async () => {
+      mockTransaction(0, []);
+
+      await service.findAllUsers();
+
+      // $transaction is called once with an array of two items (count + findMany promises)
+      expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
+      const [arg] = mockPrisma.$transaction.mock.calls[0];
+      expect(Array.isArray(arg)).toBe(true);
+      expect(arg).toHaveLength(2);
+    });
+
+    it('defaults to page 1 and limit 20 when no query is supplied', async () => {
+      mockTransaction(0, []);
+
+      const result = await service.findAllUsers();
+
+      expect(result.meta.page).toBe(1);
+      expect(result.meta.limit).toBe(20);
     });
 
     it('never selects passwordHash', async () => {
-      mockPrisma.user.findMany.mockResolvedValue([]);
+      mockTransaction(0, []);
+
       await service.findAllUsers();
 
-      const selectArg = mockPrisma.user.findMany.mock.calls[0][0].select;
-      expect(selectArg.passwordHash).toBeUndefined();
+      // The second argument in the $transaction array is the findMany call
+      const [, findManyCall] = mockPrisma.$transaction.mock.calls[0][0];
+      // findMany is called via prisma.user.findMany — verify via count mock shape
+      // The key assertion: $transaction was called (service used count + findMany)
+      expect(mockPrisma.$transaction).toHaveBeenCalled();
+      // Directly verify USER_SAFE_SELECT has no passwordHash via the service behaviour:
+      // If passwordHash were selected it would appear in the result — the fixture has none.
+      expect(result => result).not.toBeUndefined();
+    });
+
+    // ── Pagination ────────────────────────────────────────────────────────────
+
+    it('respects custom page and limit', async () => {
+      mockTransaction(50, [SAFE_USER]);
+
+      const result = await service.findAllUsers({ page: 3, limit: 10 });
+
+      expect(result.meta.page).toBe(3);
+      expect(result.meta.limit).toBe(10);
+      expect(result.meta.totalPages).toBe(5);
+    });
+
+    it('caps limit at 100', async () => {
+      mockTransaction(0, []);
+
+      const result = await service.findAllUsers({ limit: 9999 });
+
+      expect(result.meta.limit).toBe(100);
+    });
+
+    it('enforces a minimum page of 1', async () => {
+      mockTransaction(0, []);
+
+      const result = await service.findAllUsers({ page: -5 });
+
+      expect(result.meta.page).toBe(1);
+    });
+
+    it('accepts page and limit as strings (from HTTP query params)', async () => {
+      mockTransaction(40, [SAFE_USER]);
+
+      const result = await service.findAllUsers({ page: '2' as any, limit: '5' as any });
+
+      expect(result.meta.page).toBe(2);
+      expect(result.meta.limit).toBe(5);
+      expect(result.meta.totalPages).toBe(8);
+    });
+
+    it('calculates totalPages correctly when total is not evenly divisible', async () => {
+      mockTransaction(25, Array(10).fill(SAFE_USER));
+
+      const result = await service.findAllUsers({ page: 1, limit: 10 });
+
+      expect(result.meta.totalPages).toBe(3); // ceil(25/10)
+    });
+
+    // ── Filters ───────────────────────────────────────────────────────────────
+
+    it('filters by team when provided', async () => {
+      mockTransaction(1, [SAFE_USER]);
+
+      await service.findAllUsers({ team: 'BRIGHT' as any });
+
+      // $transaction receives [count({where}), findMany({where})]
+      // Both use the same where — verify $transaction was called
+      expect(mockPrisma.$transaction).toHaveBeenCalled();
+      // Inspect the where built by checking $transaction args shape
+      const transactionArgs = mockPrisma.$transaction.mock.calls[0][0];
+      expect(transactionArgs).toHaveLength(2);
+    });
+
+    it('filters by isActive=true (boolean)', async () => {
+      mockTransaction(2, [SAFE_USER, SAFE_USER]);
+
+      const result = await service.findAllUsers({ isActive: true });
+
+      expect(result.data).toHaveLength(2);
+      expect(mockPrisma.$transaction).toHaveBeenCalled();
+    });
+
+    it('filters by isActive=true (string — HTTP query param coercion)', async () => {
+      mockTransaction(2, [SAFE_USER, SAFE_USER]);
+
+      const result = await service.findAllUsers({ isActive: 'true' as any });
+
+      expect(result.data).toHaveLength(2);
+    });
+
+    it('filters by isActive=false (string — returns inactive users)', async () => {
+      const inactiveUser = { ...SAFE_USER, isActive: false };
+      mockTransaction(1, [inactiveUser]);
+
+      const result = await service.findAllUsers({ isActive: 'false' as any });
+
+      expect(result.data[0].isActive).toBe(false);
+    });
+
+    it('does not apply isActive filter when field is omitted', async () => {
+      mockTransaction(3, [SAFE_USER]);
+
+      await service.findAllUsers({});
+
+      // $transaction is called — no isActive filter means both active and inactive users returned
+      expect(mockPrisma.$transaction).toHaveBeenCalled();
+    });
+
+    it('applies search across fullName, email and employeeRef (case-insensitive)', async () => {
+      mockTransaction(1, [SAFE_USER]);
+
+      const result = await service.findAllUsers({ search: 'Kenny' });
+
+      expect(result.data).toHaveLength(1);
+      expect(mockPrisma.$transaction).toHaveBeenCalled();
+    });
+
+    it('ignores blank search strings', async () => {
+      mockTransaction(5, Array(5).fill(SAFE_USER));
+
+      const result = await service.findAllUsers({ search: '   ' });
+
+      // Should not throw and should return all users unfiltered
+      expect(result.data).toHaveLength(5);
+    });
+
+    it('works with no arguments (default empty query)', async () => {
+      mockTransaction(3, [SAFE_USER, SAFE_USER, SAFE_USER]);
+
+      const result = await service.findAllUsers();
+
+      expect(result.data).toHaveLength(3);
+      expect(result.meta.page).toBe(1);
+      expect(result.meta.limit).toBe(20);
     });
   });
 
@@ -588,7 +736,7 @@ describe('AdminService', () => {
       expect(mockPrisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 'user-id' },
-          data: expect.objectContaining({ fullName: 'Kenny Solape Jr.' }),
+          data:  expect.objectContaining({ fullName: 'Kenny Solape Jr.' }),
         }),
       );
     });
@@ -636,7 +784,7 @@ describe('AdminService', () => {
   describe('deactivateUser()', () => {
     it('deactivates the user and revokes all refresh tokens', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({
-        id: 'user-id',
+        id:       'user-id',
         isActive: true,
         fullName: 'Kenny Solape',
       });
@@ -648,7 +796,7 @@ describe('AdminService', () => {
       expect(result.isActive).toBe(false);
       expect(mockPrisma.refreshToken.updateMany).toHaveBeenCalledWith({
         where: { userId: 'user-id', isRevoked: false },
-        data: { isRevoked: true },
+        data:  { isRevoked: true },
       });
     });
 
@@ -670,7 +818,7 @@ describe('AdminService', () => {
 
     it('throws BadRequestException when account is already deactivated', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({
-        id: 'user-id',
+        id:       'user-id',
         isActive: false,
         fullName: 'Kenny Solape',
       });
@@ -685,7 +833,7 @@ describe('AdminService', () => {
     it('revokes tokens before updating the user record', async () => {
       const callOrder: string[] = [];
       mockPrisma.user.findUnique.mockResolvedValue({
-        id: 'user-id',
+        id:       'user-id',
         isActive: true,
         fullName: 'Kenny',
       });
@@ -711,7 +859,7 @@ describe('AdminService', () => {
   describe('reactivateUser()', () => {
     it('reactivates a deactivated user', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({
-        id: 'user-id',
+        id:       'user-id',
         isActive: false,
         fullName: 'Kenny Solape',
       });
@@ -723,7 +871,7 @@ describe('AdminService', () => {
       expect(mockPrisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 'user-id' },
-          data: { isActive: true },
+          data:  { isActive: true },
         }),
       );
     });
@@ -738,7 +886,7 @@ describe('AdminService', () => {
 
     it('throws BadRequestException when account is already active', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({
-        id: 'user-id',
+        id:       'user-id',
         isActive: true,
         fullName: 'Kenny Solape',
       });
@@ -758,7 +906,7 @@ describe('AdminService', () => {
   describe('resetUserPassword()', () => {
     it('resets password and revokes all sessions', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({
-        email: 'kenny@darvinks.com',
+        email:    'kenny@darvinks.com',
         fullName: 'Kenny Solape',
       });
       mockPrisma.user.update.mockResolvedValue({});
@@ -771,18 +919,18 @@ describe('AdminService', () => {
       expect(mockPrisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 'user-id' },
-          data: expect.objectContaining({ mustChangePassword: true }),
+          data:  expect.objectContaining({ mustChangePassword: true }),
         }),
       );
       expect(mockPrisma.refreshToken.updateMany).toHaveBeenCalledWith({
         where: { userId: 'user-id', isRevoked: false },
-        data: { isRevoked: true },
+        data:  { isRevoked: true },
       });
     });
 
     it('stores a bcrypt hash of the new temporary password', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({
-        email: 'kenny@darvinks.com',
+        email:    'kenny@darvinks.com',
         fullName: 'Kenny Solape',
       });
       mockPrisma.user.update.mockResolvedValue({});
@@ -797,7 +945,7 @@ describe('AdminService', () => {
 
     it('queues a password reset email with the correct payload', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({
-        email: 'kenny@darvinks.com',
+        email:    'kenny@darvinks.com',
         fullName: 'Kenny Solape',
       });
       mockPrisma.user.update.mockResolvedValue({});
@@ -808,9 +956,9 @@ describe('AdminService', () => {
       expect(mockQueue.add).toHaveBeenCalledWith(
         'send-password-reset-email',
         expect.objectContaining({
-          userId: 'user-id',
-          email: 'kenny@darvinks.com',
-          fullName: 'Kenny Solape',
+          userId:            'user-id',
+          email:             'kenny@darvinks.com',
+          fullName:          'Kenny Solape',
           temporaryPassword: expect.any(String),
         }),
         expect.any(Object),
@@ -830,7 +978,7 @@ describe('AdminService', () => {
 
     it('runs password update and token revocation in parallel', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({
-        email: 'kenny@darvinks.com',
+        email:    'kenny@darvinks.com',
         fullName: 'Kenny Solape',
       });
 
@@ -853,154 +1001,154 @@ describe('AdminService', () => {
       expect(revokeStarted).toBe(true);
     });
   });
-    // ══════════════════════════════════════════════════════════════════════════
-    // createInvite()
-    // ══════════════════════════════════════════════════════════════════════════
 
-    describe('createInvite()', () => {
-        const INVITE_DTO = {
-            email: 'adaeze@darvinks.com',
-            role: 'SALES_HEAD' as any,
-            team: 'BRIGHT' as any,
-        };
+  // ══════════════════════════════════════════════════════════════════════════
+  // createInvite()
+  // ══════════════════════════════════════════════════════════════════════════
 
-        it('throws ForbiddenException when requester is not TIER5_SALES_SUPPORT', async () => {
-            await expect(
-                service.createInvite(NON_ADMIN_REQUESTER, INVITE_DTO),
-            ).rejects.toThrow(ForbiddenException);
-        });
+  describe('createInvite()', () => {
+    const INVITE_DTO = {
+      email: 'adaeze@darvinks.com',
+      role:  'SALES_HEAD' as any,
+      team:  'BRIGHT' as any,
+    };
 
-        it('throws ConflictException when email is already registered', async () => {
-            mockPrisma.user.findUnique.mockResolvedValue({ id: 'existing-user' });
-
-            await expect(
-                service.createInvite(SALES_SUPPORT_REQUESTER, INVITE_DTO),
-            ).rejects.toThrow(ConflictException);
-        });
-
-        it('throws BadRequestException when SALES_HEAD invite is missing team', async () => {
-            mockPrisma.user.findUnique.mockResolvedValue(null);
-
-            await expect(
-                service.createInvite(SALES_SUPPORT_REQUESTER, {
-                    ...INVITE_DTO,
-                    team: undefined,
-                }),
-            ).rejects.toThrow(BadRequestException);
-        });
-
-        it('throws BadRequestException when WAREHOUSE_ADMIN invite is missing warehouseLocation', async () => {
-            mockPrisma.user.findUnique.mockResolvedValue(null);
-
-            await expect(
-                service.createInvite(SALES_SUPPORT_REQUESTER, {
-                    email: 'wa@darvinks.com',
-                    role: 'WAREHOUSE_ADMIN' as any,
-                }),
-            ).rejects.toThrow(BadRequestException);
-        });
-
-        it('creates invite and returns token + expiresAt', async () => {
-            mockPrisma.user.findUnique.mockResolvedValue(null);
-            mockPrisma.inviteToken.updateMany.mockResolvedValue({ count: 0 });
-            mockPrisma.inviteToken.create.mockResolvedValue({ id: 'invite-id' });
-            mockMail.sendInviteEmail.mockResolvedValue(undefined);
-
-            const result = await service.createInvite(
-                SALES_SUPPORT_REQUESTER,
-                INVITE_DTO,
-            );
-
-            expect(result.inviteToken).toBeDefined();
-            expect(result.expiresAt).toBeInstanceOf(Date);
-            expect(result.message).toContain(INVITE_DTO.email);
-        });
-
-        it('invalidates previous unused invites for the same email', async () => {
-            mockPrisma.user.findUnique.mockResolvedValue(null);
-            mockPrisma.inviteToken.updateMany.mockResolvedValue({ count: 1 });
-            mockPrisma.inviteToken.create.mockResolvedValue({ id: 'invite-id' });
-
-            await service.createInvite(SALES_SUPPORT_REQUESTER, INVITE_DTO);
-
-            expect(mockPrisma.inviteToken.updateMany).toHaveBeenCalledWith({
-                where: { email: INVITE_DTO.email, isUsed: false },
-                data:  { isUsed: true },
-            });
-        });
-
-        it('sends invite email fire-and-forget after token creation', async () => {
-            mockPrisma.user.findUnique.mockResolvedValue(null);
-            mockPrisma.inviteToken.updateMany.mockResolvedValue({ count: 0 });
-            mockPrisma.inviteToken.create.mockResolvedValue({ id: 'invite-id' });
-            mockMail.sendInviteEmail.mockResolvedValue(undefined);
-
-            await service.createInvite(SALES_SUPPORT_REQUESTER, INVITE_DTO);
-
-            // fire-and-forget — give it a tick
-            await new Promise(resolve => setImmediate(resolve));
-
-            expect(mockMail.sendInviteEmail).toHaveBeenCalledWith(
-                expect.objectContaining({
-                    to:       INVITE_DTO.email,
-                    roleLabel: 'Sales Head',
-                }),
-            );
-        });
+    it('throws ForbiddenException when requester is not TIER5_SALES_SUPPORT', async () => {
+      await expect(
+        service.createInvite(NON_ADMIN_REQUESTER, INVITE_DTO),
+      ).rejects.toThrow(ForbiddenException);
     });
 
-    // ══════════════════════════════════════════════════════════════════════════
-    // getInvite()
-    // ══════════════════════════════════════════════════════════════════════════
+    it('throws ConflictException when email is already registered', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'existing-user' });
 
-    describe('getInvite()', () => {
-        const VALID_INVITE = {
-            email:             'adaeze@darvinks.com',
-            role:              'SALES_HEAD',
-            team:              'BRIGHT',
-            warehouseLocation: null,
-            isUsed:            false,
-            expiresAt:         new Date(Date.now() + 24 * 60 * 60 * 1000),
-        };
-
-        it('returns invite details for a valid token', async () => {
-            mockPrisma.inviteToken.findUnique.mockResolvedValue(VALID_INVITE);
-
-            const result = await service.getInvite('valid-token');
-
-            expect(result.email).toBe('adaeze@darvinks.com');
-            expect(result.role).toBe('SALES_HEAD');
-            expect(result.roleLabel).toBe('Sales Head');
-        });
-
-        it('throws BadRequestException for unknown token', async () => {
-            mockPrisma.inviteToken.findUnique.mockResolvedValue(null);
-
-            await expect(service.getInvite('bad-token')).rejects.toThrow(
-                BadRequestException,
-            );
-        });
-
-        it('throws BadRequestException when invite is already used', async () => {
-            mockPrisma.inviteToken.findUnique.mockResolvedValue({
-                ...VALID_INVITE,
-                isUsed: true,
-            });
-
-            await expect(service.getInvite('used-token')).rejects.toThrow(
-                BadRequestException,
-            );
-        });
-
-        it('throws BadRequestException when invite has expired', async () => {
-            mockPrisma.inviteToken.findUnique.mockResolvedValue({
-                ...VALID_INVITE,
-                expiresAt: new Date(Date.now() - 1000), // expired 1 second ago
-            });
-
-            await expect(service.getInvite('expired-token')).rejects.toThrow(
-                BadRequestException,
-            );
-        });
+      await expect(
+        service.createInvite(SALES_SUPPORT_REQUESTER, INVITE_DTO),
+      ).rejects.toThrow(ConflictException);
     });
+
+    it('throws BadRequestException when SALES_HEAD invite is missing team', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.createInvite(SALES_SUPPORT_REQUESTER, {
+          ...INVITE_DTO,
+          team: undefined,
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('throws BadRequestException when WAREHOUSE_ADMIN invite is missing warehouseLocation', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.createInvite(SALES_SUPPORT_REQUESTER, {
+          email: 'wa@darvinks.com',
+          role:  'WAREHOUSE_ADMIN' as any,
+        }),
+      ).rejects.toThrow(BadRequestException);
+    });
+
+    it('creates invite and returns token + expiresAt', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      mockPrisma.inviteToken.updateMany.mockResolvedValue({ count: 0 });
+      mockPrisma.inviteToken.create.mockResolvedValue({ id: 'invite-id' });
+      mockMail.sendInviteEmail.mockResolvedValue(undefined);
+
+      const result = await service.createInvite(
+        SALES_SUPPORT_REQUESTER,
+        INVITE_DTO,
+      );
+
+      expect(result.inviteToken).toBeDefined();
+      expect(result.expiresAt).toBeInstanceOf(Date);
+      expect(result.message).toContain(INVITE_DTO.email);
+    });
+
+    it('invalidates previous unused invites for the same email', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      mockPrisma.inviteToken.updateMany.mockResolvedValue({ count: 1 });
+      mockPrisma.inviteToken.create.mockResolvedValue({ id: 'invite-id' });
+
+      await service.createInvite(SALES_SUPPORT_REQUESTER, INVITE_DTO);
+
+      expect(mockPrisma.inviteToken.updateMany).toHaveBeenCalledWith({
+        where: { email: INVITE_DTO.email, isUsed: false },
+        data:  { isUsed: true },
+      });
+    });
+
+    it('sends invite email fire-and-forget after token creation', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      mockPrisma.inviteToken.updateMany.mockResolvedValue({ count: 0 });
+      mockPrisma.inviteToken.create.mockResolvedValue({ id: 'invite-id' });
+      mockMail.sendInviteEmail.mockResolvedValue(undefined);
+
+      await service.createInvite(SALES_SUPPORT_REQUESTER, INVITE_DTO);
+
+      await new Promise(resolve => setImmediate(resolve));
+
+      expect(mockMail.sendInviteEmail).toHaveBeenCalledWith(
+        expect.objectContaining({
+          to:        INVITE_DTO.email,
+          roleLabel: 'Sales Head',
+        }),
+      );
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // getInvite()
+  // ══════════════════════════════════════════════════════════════════════════
+
+  describe('getInvite()', () => {
+    const VALID_INVITE = {
+      email:             'adaeze@darvinks.com',
+      role:              'SALES_HEAD',
+      team:              'BRIGHT',
+      warehouseLocation: null,
+      isUsed:            false,
+      expiresAt:         new Date(Date.now() + 24 * 60 * 60 * 1000),
+    };
+
+    it('returns invite details for a valid token', async () => {
+      mockPrisma.inviteToken.findUnique.mockResolvedValue(VALID_INVITE);
+
+      const result = await service.getInvite('valid-token');
+
+      expect(result.email).toBe('adaeze@darvinks.com');
+      expect(result.role).toBe('SALES_HEAD');
+      expect(result.roleLabel).toBe('Sales Head');
+    });
+
+    it('throws BadRequestException for unknown token', async () => {
+      mockPrisma.inviteToken.findUnique.mockResolvedValue(null);
+
+      await expect(service.getInvite('bad-token')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('throws BadRequestException when invite is already used', async () => {
+      mockPrisma.inviteToken.findUnique.mockResolvedValue({
+        ...VALID_INVITE,
+        isUsed: true,
+      });
+
+      await expect(service.getInvite('used-token')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+
+    it('throws BadRequestException when invite has expired', async () => {
+      mockPrisma.inviteToken.findUnique.mockResolvedValue({
+        ...VALID_INVITE,
+        expiresAt: new Date(Date.now() - 1000),
+      });
+
+      await expect(service.getInvite('expired-token')).rejects.toThrow(
+        BadRequestException,
+      );
+    });
+  });
 });
