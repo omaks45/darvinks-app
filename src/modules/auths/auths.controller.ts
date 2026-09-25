@@ -1,4 +1,4 @@
-// src/modules/auths/auths.controller.ts
+
 import {
   Body,
   Controller,
@@ -17,6 +17,7 @@ import {
   ApiBody,
   ApiConsumes,
   ApiOperation,
+  ApiParam,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
@@ -405,10 +406,50 @@ export class AuthController {
   @Public()
   @HttpCode(HttpStatus.OK)
   @ApiOperation({
-    summary: 'Validate an invite token',
-    description:
-      'Returns the pre-assigned email, role and team for a valid invite. ' +
-      'Mobile app calls this on the registration screen to pre-fill role info.',
+    summary: 'Fetch invite details by token (public)',
+    description: `
+**Public endpoint — no authentication required.**
+
+Call this when the invitee opens their invite link, before showing the registration form.
+
+Use the returned data to:
+- **Pre-fill and lock the \`email\` field** — the server will reject registration if the email doesn't match exactly
+- Display the role they are being invited as (\`roleLabel\`)
+- Show the team they'll be joining
+
+Show a clear error screen if the response is 404 (token expired, already used, or invalid).
+    `,
+  })
+  @ApiParam({
+    name: 'token',
+    description: 'The invite token UUID from the invite email',
+    example: '550e8400-e29b-41d4-a716-446655440000',
+  })
+  @ApiResponse({
+    status: 200,
+    description: '✅ Invite is valid — use these details to pre-fill the registration form',
+    schema: {
+      example: {
+        email: 'adaeze.okonkwo@darvinks.com',
+        role: 'ZONAL_SALES_MANAGER',
+        roleLabel: 'Zonal Sales Manager',
+        team: 'BRIGHT',
+        expiresAt: '2026-09-27T13:00:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({
+    status: 404,
+    description: '❌ Token not found, already used, or expired — show error screen',
+    schema: {
+      example: {
+        statusCode: 404,
+        message: 'Invite token is invalid, expired, or has already been used',
+        error: 'Not Found',
+        path: '/api/v1/auth/invite/bad-token',
+        timestamp: '2026-09-25T12:00:00.000Z',
+      },
+    },
   })
   async getInvite(@Param('token') token: string) {
     return this.adminService.getInvite(token);
@@ -425,11 +466,28 @@ export class AuthController {
   )
   @ApiOperation({
     summary: 'Register using an invite token (field agents Tier 1–4)',
-    description:
-      'Field agents (Merchandiser → Zonal Sales Manager) self-register using an invite link ' +
-      'sent by their direct superior. Role, team and warehouse location are locked to the invite. ' +
-      'The registrant provides their Nigerian **state** so the system can auto-assign their region. ' +
-      'An ID card is queued for generation immediately after registration.',
+    description: `
+Completes registration for a field agent using an invite token sent by their direct superior.
+
+**Role, team, and reporting line are locked to the invite — the registrant cannot change them.**
+
+---
+
+### How to implement this screen (mobile)
+
+1. Call \`GET /auth/invite/:token\` first to get the invite details
+2. Pre-fill the \`email\` field from the response and **make it read-only** — any mismatch returns 400
+3. Let the user fill in the remaining fields
+4. Submit as **multipart/form-data** (required even if no photo is attached)
+5. The \`state\` field drives automatic region assignment — no region field needed
+
+---
+
+### After successful registration
+- An OTP verification email is sent automatically — handle the OTP verify flow as normal
+- The \`idCardUrl\` on the user profile is generated asynchronously — it will not be available immediately; check it later or poll
+- The \`reportsToId\` chain is set automatically from the inviter — no client action needed
+    `,
   })
   @ApiConsumes('multipart/form-data')
   @ApiBody({
