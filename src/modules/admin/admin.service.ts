@@ -1,3 +1,4 @@
+// src/modules/admin/admin.service.ts
 import {
   BadRequestException,
   ConflictException,
@@ -49,6 +50,22 @@ const USER_SAFE_SELECT = {
   createdAt: true,
   updatedAt: true,
 } as const;
+
+// ── Invite chain: maps inviter tier → roles they are allowed to invite ────────
+//
+// TIER5_SALES_HEAD → TIER4 (Zonal Sales Manager)
+// TIER4            → TIER3 (ATSM, TSM)
+// TIER3            → TIER2 (Sales Representative, SSR)
+// TIER2            → TIER1 (Merchandiser, Promoter, DBSR, VSR)
+// TIER5_SALES_SUPPORT → everything (Tier 5+, warehouse) via provisionUser()
+//
+// Roles listed here must match the UserRole enum values in Prisma.
+const FIELD_TIER_INVITE_MAP: Record<string, UserRole[]> = {
+  TIER5_SALES_HEAD: [UserRole.ZONAL_SALES_MANAGER],
+  TIER4:            [UserRole.ATSM, UserRole.TSM],
+  TIER3:            [UserRole.SALES_REPRESENTATIVE, UserRole.SSR],
+  TIER2:            [UserRole.MERCHANDISER, UserRole.PROMOTER, UserRole.DBSR, UserRole.VSR],
+};
 
 // ── Query DTO (inline — avoids creating a separate file if you prefer) ─────────
 export interface FindAllUsersQuery {
@@ -456,15 +473,57 @@ export class AdminService {
 
   // ── Invite management ──────────────────────────────────────────────────────
 
+  /**
+   * Creates an invite for a new field-tier user.
+   *
+   * Who can invite whom:
+   *   TIER5_SALES_SUPPORT → anything (handled separately via provisionUser)
+   *   TIER5_SALES_HEAD    → TIER4 (Zonal Sales Manager) only
+   *   TIER4               → TIER3 (ATSM, TSM)
+   *   TIER3               → TIER2 (Sales Representative, SSR)
+   *   TIER2               → TIER1 (Merchandiser, Promoter, DBSR, VSR)
+   *   TIER1               → cannot invite anyone
+   *
+   * Team is automatically inherited from the inviter for all field-tier
+   * inviters — the invitee cannot choose a different team.
+   */
   async createInvite(
     requester: JwtPayload,
     dto: CreateInviteDto,
   ) {
-    if (requester.tier !== 'TIER5_SALES_SUPPORT') {
-      throw new ForbiddenException('Only System Admins can create invites');
+    const inviterTier = requester.tier as string;
+
+    // ── 1. Determine allowed roles for this inviter ──────────────────────────
+    const allowedRoles = FIELD_TIER_INVITE_MAP[inviterTier];
+
+    if (!allowedRoles) {
+      // TIER1 and oversight tiers that are not SALES_HEAD fall here
+      throw new ForbiddenException(
+        'You do not have permission to send invites. ' +
+        'Only Sales Head (Tier 5), ZSMs (Tier 4), TSMs/ATSMs (Tier 3), and ' +
+        'Sales Representatives/SSRs (Tier 2) can invite the tier directly below them.',
+      );
     }
 
-    // Check the email is not already registered
+    // ── 2. Validate that the requested role is in this inviter's allowed set ─
+    if (!allowedRoles.includes(dto.role as any)) {
+      throw new ForbiddenException(
+        `As a ${inviterTier} you can only invite: ` +
+        allowedRoles.join(', ') +
+        `. Requested role "${dto.role}" is not permitted.`,
+      );
+    }
+
+    // ── 3. Auto-lock team from the inviter (field-tier inviters always have a team) ─
+    //    TIER5_SALES_HEAD also has a team — it was set when the account was provisioned.
+    if (!requester.team) {
+      throw new ForbiddenException(
+        'Your account does not have a team assigned. Contact the System Admin.',
+      );
+    }
+    const lockedTeam: Team = requester.team as Team;
+
+    // ── 4. Email uniqueness ──────────────────────────────────────────────────
     const existing = await this.prisma.user.findUnique({
       where: { email: dto.email },
       select: { id: true },
@@ -475,40 +534,31 @@ export class AdminService {
       );
     }
 
-    // Validate role-specific requirements
-    if (dto.role === 'SALES_HEAD' && !dto.team) {
-      throw new BadRequestException('Team is required for Sales Head');
-    }
-    if (dto.role === 'WAREHOUSE_ADMIN' && !dto.warehouseLocation) {
-      throw new BadRequestException('Warehouse location is required for Warehouse Admin');
-    }
-
-    // Invalidate any existing unused invite for this email
+    // ── 5. Invalidate any previous unused invite for this email ─────────────
     await this.prisma.inviteToken.updateMany({
       where: { email: dto.email, isUsed: false },
       data:  { isUsed: true },
     });
 
-    // Generate secure random token
+    // ── 6. Persist the new invite token ─────────────────────────────────────
     const token     = crypto.randomBytes(32).toString('hex');
     const expiresAt = new Date(Date.now() + 48 * 60 * 60 * 1000); // 48 hours
 
     await this.prisma.inviteToken.create({
       data: {
         token,
-        email:             dto.email,
-        role:              dto.role as any,
-        team:              dto.team ?? null,
-        warehouseLocation: dto.warehouseLocation ?? null,
-        createdById:       requester.sub,
+        email:       dto.email,
+        role:        dto.role as any,
+        team:        lockedTeam,
+        createdById: requester.sub,
         expiresAt,
       },
     });
 
-    const roleLabel  = labelFromRole(dto.role as any);
-    const inviteUrl  = `${process.env.APP_INVITE_BASE_URL ?? 'https://app.darvinks.com/register'}?token=${token}`;
+    const roleLabel = labelFromRole(dto.role as any);
+    const inviteUrl = `${process.env.APP_INVITE_BASE_URL ?? 'https://app.darvinks.com/register'}?token=${token}`;
 
-    // Send invite email — fire and forget
+    // fire-and-forget
     void this.mail.sendInviteEmail({
       to:           dto.email,
       roleLabel,
@@ -517,11 +567,11 @@ export class AdminService {
     });
 
     this.logger.log(
-      `Invite created for ${dto.email} (${roleLabel}) by ${requester.sub}`,
+      `Invite created for ${dto.email} (${roleLabel}, team: ${lockedTeam}) by ${requester.sub} [${inviterTier}]`,
     );
 
     return {
-      message:   `Invite sent to ${dto.email}`,
+      message:     `Invite sent to ${dto.email}`,
       expiresAt,
       inviteToken: token,
     };

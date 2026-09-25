@@ -7,7 +7,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common';
-import { Region } from '@prisma/client';
+import { CustomerType, Region } from '@prisma/client';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { GoogleMapsService } from '@common/google/google-map.service';
 import { resolveRegion, resolveActualRegionForState } from '@common/utils/region.util';
@@ -81,6 +81,18 @@ export class CustomerService {
     let resolvedState: string;
 
     const isFieldTier = FIELD_TIERS.includes(requester.tier as string);
+
+    // ── TIER1 restriction: cannot create PRIMARY customers ───────────────────
+    // TIER1 agents only deal with secondary customers (sub-distributors,
+    // wholesalers, retailers). Primary customers (KDs) are the responsibility
+    // of their TIER2 inviter.
+    if (requester.tier === 'TIER1' && dto.customerType !== CustomerType.SECONDARY) {
+      throw new ForbiddenException(
+        'TIER1 agents can only register secondary customers (sub-distributors, ' +
+        'wholesalers, retailers). Primary customers (Key Distributors) must be ' +
+        'registered by your Sales Representative.',
+      );
+    }
 
     if (isFieldTier) {
       if (dto.latitude === undefined || dto.longitude === undefined) {
@@ -226,9 +238,36 @@ export class CustomerService {
 
     const isAdmin = ADMIN_TIERS.includes(requester.tier as string);
 
+    // ── TIER1 visibility rule ────────────────────────────────────────────────
+    // TIER1 agents see:
+    //   1. Their own SECONDARY customers
+    //   2. ALL PRIMARY customers owned by their direct TIER2 inviter (reportsToId)
+    // They never see primary customers they don't own or secondary customers of others.
+    if (requester.tier === 'TIER1') {
+      const reportsToId = await this.getReportsToId(requester.sub);
+
+      return this.prisma.customer.findMany({
+        where: {
+          OR: [
+            // Their own secondary customers
+            { ownerId: requester.sub, customerType: CustomerType.SECONDARY },
+            // All primary customers owned by their TIER2 inviter
+            ...(reportsToId ? [{ ownerId: reportsToId, customerType: CustomerType.PRIMARY }] : []),
+          ],
+          ...(state                 ? { state: state.toLowerCase().trim() } : {}),
+          ...(isActive !== undefined ? { isActive }                          : {}),
+          // customerType filter: only apply if it is compatible with the OR rule above
+          ...(customerType          ? { customerType }                       : {}),
+          ...(secondaryCustomerType ? { secondaryCustomerType }              : {}),
+        },
+        select:  CUSTOMER_SELECT,
+        orderBy: { businessName: 'asc' },
+      });
+    }
+
     return this.prisma.customer.findMany({
       where: {
-        // Tier 1–4: only see customers THEY created (ownerId = their own userId)
+        // TIER2–TIER4: only see customers THEY created (ownerId = their own userId)
         // Admin tiers: see all customers, with optional region filter
         ...(!isAdmin ? { ownerId: requester.sub } : {}),
         ...(isAdmin && region ? { region: region as Region } : {}),
@@ -249,7 +288,7 @@ export class CustomerService {
     });
     if (!customer) throw new NotFoundException(`Customer ${id} not found`);
 
-    this.assertCanAccess(customer, requester);
+    await this.assertCanAccess(customer, requester);
     return customer;
   }
 
@@ -453,6 +492,18 @@ export class CustomerService {
 
   // ── Private helpers ────────────────────────────────────────────────────────
 
+  /**
+   * Fetches the reportsToId (TIER2 inviter) for a TIER1 user.
+   * Returns null if the user has no inviter set (edge case during migration).
+   */
+  private async getReportsToId(userId: string): Promise<string | null> {
+    const user = await this.prisma.user.findUnique({
+      where:  { id: userId },
+      select: { reportsToId: true },
+    });
+    return user?.reportsToId ?? null;
+  }
+
   private async assertExists(id: string) {
     const customer = await this.prisma.customer.findUnique({
       where:  { id },
@@ -463,12 +514,26 @@ export class CustomerService {
     return customer;
   }
 
-  private assertCanAccess(
-    customer: { ownerId: string; region: Region },
+  /**
+   * Access rule:
+   *   Admin tiers       → always allowed
+   *   TIER1             → allowed for their own SECONDARY customers
+   *                       OR primary customers owned by their TIER2 inviter
+   *   TIER2–TIER4       → allowed only for customers they own
+   */
+  private async assertCanAccess(
+    customer: { ownerId: string; region: Region; customerType?: CustomerType },
     requester: JwtPayload,
-  ) {
+  ): Promise<void> {
     if (ADMIN_TIERS.includes(requester.tier as string)) return;
     if (customer.ownerId === requester.sub) return;
+
+    // TIER1 special case: can view primary customers owned by their inviter
+    if (requester.tier === 'TIER1' && customer.customerType === CustomerType.PRIMARY) {
+      const reportsToId = await this.getReportsToId(requester.sub);
+      if (reportsToId && customer.ownerId === reportsToId) return;
+    }
+
     throw new ForbiddenException('You do not have access to this customer');
   }
 

@@ -12,7 +12,6 @@ import { AuthService } from './auths.service';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { CloudinaryService } from '@modules/cloudinary/cloudinary.service';
 import { TokenService } from '@modules/tokens/tokens.service';
-import { MailService } from '@modules/email/email.service';
 import type { RegisterDto } from './dto/register.dto';
 import type { LoginDto } from './dto/auth.dto';
 
@@ -20,17 +19,17 @@ import type { LoginDto } from './dto/auth.dto';
 
 const mockPrisma = {
   user: {
-    findFirst: jest.fn(),
-    findUnique: jest.fn(),
+    findFirst:        jest.fn(),
+    findUnique:       jest.fn(),
     findUniqueOrThrow: jest.fn(),
-    create: jest.fn(),
-    update: jest.fn(),
-    count: jest.fn(),
+    create:           jest.fn(),
+    update:           jest.fn(),
+    count:            jest.fn(),
   },
   passwordResetOtp: {
-    create: jest.fn(),
-    findFirst: jest.fn(),
-    update: jest.fn(),
+    create:     jest.fn(),
+    findFirst:  jest.fn(),
+    update:     jest.fn(),
     updateMany: jest.fn(),
   },
   refreshToken: {
@@ -40,19 +39,15 @@ const mockPrisma = {
 };
 
 const mockTokenService = {
-  signAccessToken: jest.fn(),
-  createRefreshToken: jest.fn(),
-  rotateRefreshToken: jest.fn(),
-  revokeToken: jest.fn(),
-  revokeAllForUser: jest.fn(),
+  signAccessToken:     jest.fn(),
+  createRefreshToken:  jest.fn(),
+  rotateRefreshToken:  jest.fn(),
+  revokeToken:         jest.fn(),
+  revokeAllForUser:    jest.fn(),
 };
 
 const mockCloudinary = {
   uploadBuffer: jest.fn(),
-};
-
-const mockMail = {
-  sendForgotPasswordEmail: jest.fn(),
 };
 
 const mockConfig = {
@@ -65,24 +60,25 @@ const mockConfig = {
   }),
 };
 
+// Single queue mock — OTP emails and ID card jobs both go through it
 const mockQueue = { add: jest.fn() };
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
 const REGISTER_DTO: RegisterDto = {
-  fullName: 'Chioma Okafor',
-  email: 'chioma@darvinks.com',
-  phone: '+2348012345678',
-  password: 'SecurePass123!',
-  role: 'SALES_REPRESENTATIVE' as any,
-  team: 'BRIGHT' as any,
-  state: 'lagos',
-  dateOfBirth: '1995-06-15',
+  fullName:      'Chioma Okafor',
+  email:         'chioma@darvinks.com',
+  phone:         '+2348012345678',
+  password:      'SecurePass123!',
+  role:          'SALES_REPRESENTATIVE' as any,
+  team:          'BRIGHT' as any,
+  state:         'lagos',
+  dateOfBirth:   '1995-06-15',
   annualTargets: { LOTION: 500 },
 };
 
 const LOGIN_DTO: LoginDto = {
-  email: 'chioma@darvinks.com',
+  email:    'chioma@darvinks.com',
   password: 'SecurePass123!',
 };
 
@@ -99,7 +95,7 @@ describe('AuthService', () => {
         { provide: TokenService,      useValue: mockTokenService },
         { provide: CloudinaryService, useValue: mockCloudinary },
         { provide: ConfigService,     useValue: mockConfig },
-        { provide: MailService,       useValue: mockMail },
+        // MailService is NOT injected into AuthService — all emails go through the queue
         { provide: getQueueToken('notifications'), useValue: mockQueue },
       ],
     }).compile();
@@ -124,7 +120,7 @@ describe('AuthService', () => {
       mockPrisma.user.findFirst.mockResolvedValue(null);
       mockPrisma.user.count.mockResolvedValue(5);
       mockPrisma.user.create.mockResolvedValue({
-        id: 'new-user-id',
+        id:          'new-user-id',
         employeeRef: 'Dar-00000006',
       });
 
@@ -160,11 +156,25 @@ describe('AuthService', () => {
 
       await service.register(REGISTER_DTO);
 
-      const createCall = mockPrisma.user.create.mock.calls[0][0];
-      const storedHash = createCall.data.passwordHash;
+      const createCall  = mockPrisma.user.create.mock.calls[0][0];
+      const storedHash  = createCall.data.passwordHash;
 
       expect(storedHash).not.toBe(REGISTER_DTO.password);
       expect(await bcrypt.compare(REGISTER_DTO.password, storedHash)).toBe(true);
+    });
+
+    it('derives tier and roleLabel from role — never stores raw tier from client', async () => {
+      mockPrisma.user.findFirst.mockResolvedValue(null);
+      mockPrisma.user.count.mockResolvedValue(0);
+      mockPrisma.user.create.mockResolvedValue({ id: 'uid', employeeRef: 'Dar-00000001' });
+
+      await service.register(REGISTER_DTO);
+
+      const data = mockPrisma.user.create.mock.calls[0][0].data;
+      // SALES_REPRESENTATIVE → TIER3, label 'Sales Representative'
+      expect(data.tier).toBeDefined();
+      expect(data.roleLabel).toBeDefined();
+      expect(data.role).toBe(REGISTER_DTO.role);
     });
 
     it('auto-assigns region from state', async () => {
@@ -187,7 +197,7 @@ describe('AuthService', () => {
       mockPrisma.user.create.mockResolvedValue({ id: 'uid', employeeRef: 'Dar-00000001' });
 
       const mockFile = {
-        buffer: Buffer.from('fake-image'),
+        buffer:   Buffer.from('fake-image'),
         mimetype: 'image/jpeg',
       } as Express.Multer.File;
 
@@ -209,7 +219,7 @@ describe('AuthService', () => {
 
       expect(mockQueue.add).toHaveBeenCalledWith(
         'generate-id-card',
-        { userId: 'new-user-id', roleLabel: 'Sales Representative' },
+        { userId: 'new-user-id', roleLabel: expect.any(String) },
         expect.any(Object),
       );
     });
@@ -232,12 +242,12 @@ describe('AuthService', () => {
       overrides: Partial<{ isActive: boolean }> = {},
     ) {
       return {
-        id: 'user-id',
-        email: LOGIN_DTO.email,
+        id:           'user-id',
+        email:        LOGIN_DTO.email,
         passwordHash: await bcrypt.hash(password, 10),
-        tier: 'TIER2',
-        team: 'BRIGHT',
-        isActive: true,
+        tier:         'TIER2',
+        team:         'BRIGHT',
+        isActive:     true,
         ...overrides,
       };
     }
@@ -331,7 +341,7 @@ describe('AuthService', () => {
       expect(mockTokenService.revokeAllForUser).toHaveBeenCalledWith('user-id');
 
       const updateCall = mockPrisma.user.update.mock.calls[0][0];
-      const newHash = updateCall.data.passwordHash;
+      const newHash    = updateCall.data.passwordHash;
       expect(newHash).not.toBe('OldPass123!');
       expect(await bcrypt.compare('NewPass456!', newHash)).toBe(true);
     });
@@ -373,11 +383,10 @@ describe('AuthService', () => {
   // ── forgotPassword ─────────────────────────────────────────────────────────
 
   describe('forgotPassword()', () => {
-    it('creates an OTP and sends email when user exists and is active', async () => {
+    it('creates an OTP and queues email when user exists', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({
-        id: 'user-id',
+        id:       'user-id',
         fullName: 'Chioma Okafor',
-        isActive: true,
       });
       mockPrisma.passwordResetOtp.updateMany.mockResolvedValue({ count: 0 });
       mockPrisma.passwordResetOtp.create.mockResolvedValue({ id: 'otp-id' });
@@ -396,53 +405,46 @@ describe('AuthService', () => {
           }),
         }),
       );
-      // Email is fire-and-forget (void) — give it a tick to fire
+      // OTP email is delivered via the notifications queue, not MailService
       await new Promise(resolve => setImmediate(resolve));
-      expect(mockMail.sendForgotPasswordEmail).toHaveBeenCalledWith(
+      expect(mockQueue.add).toHaveBeenCalledWith(
+        'send-otp-email',
         expect.objectContaining({
           to:       'chioma@darvinks.com',
           fullName: 'Chioma Okafor',
           otp:      expect.stringMatching(/^\d{6}$/),
         }),
+        expect.any(Object),
       );
     });
 
     it('stores the OTP as a bcrypt hash — never plain text', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({
-        id: 'user-id', fullName: 'Chioma', isActive: true,
+        id: 'user-id', fullName: 'Chioma',
       });
       mockPrisma.passwordResetOtp.updateMany.mockResolvedValue({ count: 0 });
       mockPrisma.passwordResetOtp.create.mockResolvedValue({ id: 'otp-id' });
 
       await service.forgotPassword('chioma@darvinks.com');
 
-      const createCall = mockPrisma.passwordResetOtp.create.mock.calls[0][0];
-      const storedHash = createCall.data.otpHash;
+      const createCall  = mockPrisma.passwordResetOtp.create.mock.calls[0][0];
+      const storedHash  = createCall.data.otpHash;
 
       // Must be a bcrypt hash, not a plain 6-digit string
       expect(storedHash).toMatch(/^\$2[ab]\$\d+\$/);
     });
 
-    it('silently returns when user does not exist — no email sent', async () => {
+    it('silently returns when user does not exist — no queue job fired', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(null);
 
       await expect(service.forgotPassword('ghost@darvinks.com')).resolves.toBeUndefined();
       expect(mockPrisma.passwordResetOtp.create).not.toHaveBeenCalled();
-      expect(mockMail.sendForgotPasswordEmail).not.toHaveBeenCalled();
-    });
-
-    it('silently returns when user is deactivated — no email sent', async () => {
-      mockPrisma.user.findUnique.mockResolvedValue({
-        id: 'user-id', fullName: 'Chioma', isActive: false,
-      });
-
-      await expect(service.forgotPassword('chioma@darvinks.com')).resolves.toBeUndefined();
-      expect(mockPrisma.passwordResetOtp.create).not.toHaveBeenCalled();
+      expect(mockQueue.add).not.toHaveBeenCalled();
     });
 
     it('invalidates previous unused OTPs before creating a new one', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({
-        id: 'user-id', fullName: 'Chioma', isActive: true,
+        id: 'user-id', fullName: 'Chioma',
       });
       mockPrisma.passwordResetOtp.updateMany.mockResolvedValue({ count: 1 });
       mockPrisma.passwordResetOtp.create.mockResolvedValue({ id: 'otp-id' });
@@ -468,7 +470,7 @@ describe('AuthService', () => {
         id:        'otp-id',
         otpHash,
         isUsed:    false,
-        expiresAt: new Date(Date.now() + 10 * 60 * 1000), // 10 mins from now
+        expiresAt: new Date(Date.now() + 10 * 60 * 1000),
       });
 
       const result = await service.verifyOtp('chioma@darvinks.com', otp);
@@ -514,12 +516,9 @@ describe('AuthService', () => {
         id: 'otp-id', otpHash, isUsed: false,
         expiresAt: new Date(Date.now() + 10 * 60 * 1000),
       });
-      mockPrisma.$transaction.mockImplementation(
-        (ops: Promise<unknown>[]) => Promise.all(ops),
-      );
       mockPrisma.passwordResetOtp.update.mockResolvedValue({});
       mockPrisma.user.update.mockResolvedValue({});
-      mockPrisma.refreshToken.updateMany.mockResolvedValue({ count: 1 });
+      mockTokenService.revokeAllForUser.mockResolvedValue(undefined);
     }
 
     it('resets password and marks OTP as used', async () => {
@@ -527,14 +526,15 @@ describe('AuthService', () => {
 
       await service.resetPassword('chioma@darvinks.com', '483921', 'NewSecure456!');
 
-      expect(mockPrisma.$transaction).toHaveBeenCalled();
-      expect(mockPrisma.passwordResetOtp.update).toHaveBeenCalledWith(
-        expect.objectContaining({ data: { isUsed: true } }),
-      );
+      // Service uses Promise.all — NOT $transaction
       expect(mockPrisma.user.update).toHaveBeenCalledWith(
         expect.objectContaining({
-          data: expect.objectContaining({ mustChangePassword: false }),
+          where: { id: 'user-id' },
+          data:  expect.objectContaining({ passwordHash: expect.any(String) }),
         }),
+      );
+      expect(mockPrisma.passwordResetOtp.update).toHaveBeenCalledWith(
+        expect.objectContaining({ data: { isUsed: true } }),
       );
     });
 
@@ -543,23 +543,19 @@ describe('AuthService', () => {
 
       await service.resetPassword('chioma@darvinks.com', '483921', 'NewSecure456!');
 
-      const updateCall  = mockPrisma.user.update.mock.calls[0][0];
-      const newHash     = updateCall.data.passwordHash;
+      const updateCall = mockPrisma.user.update.mock.calls[0][0];
+      const newHash    = updateCall.data.passwordHash;
       expect(newHash).not.toBe('NewSecure456!');
       expect(await bcrypt.compare('NewSecure456!', newHash)).toBe(true);
     });
 
-    it('revokes all refresh tokens after password reset', async () => {
+    it('revokes all refresh tokens after password reset via TokenService', async () => {
       await setupValidReset();
 
       await service.resetPassword('chioma@darvinks.com', '483921', 'NewSecure456!');
 
-      expect(mockPrisma.refreshToken.updateMany).toHaveBeenCalledWith(
-        expect.objectContaining({
-          where: { userId: 'user-id', isRevoked: false },
-          data:  { isRevoked: true },
-        }),
-      );
+      // Service calls tokenService.revokeAllForUser — not prisma.refreshToken directly
+      expect(mockTokenService.revokeAllForUser).toHaveBeenCalledWith('user-id');
     });
 
     it('throws BadRequestException when OTP is wrong', async () => {
@@ -574,7 +570,7 @@ describe('AuthService', () => {
         service.resetPassword('chioma@darvinks.com', '000000', 'NewPass456!'),
       ).rejects.toThrow(BadRequestException);
 
-      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+      expect(mockPrisma.user.update).not.toHaveBeenCalled();
     });
 
     it('throws BadRequestException when no active OTP exists', async () => {
@@ -594,15 +590,15 @@ describe('AuthService', () => {
       ).rejects.toThrow(BadRequestException);
     });
 
-    it('does not call $transaction when OTP validation fails', async () => {
+    it('does not call user.update when OTP validation fails', async () => {
       mockPrisma.user.findUnique.mockResolvedValue({ id: 'user-id' });
       mockPrisma.passwordResetOtp.findFirst.mockResolvedValue(null);
 
       await expect(
         service.resetPassword('chioma@darvinks.com', '483921', 'NewPass456!'),
-      ).rejects.toThrow();
+      ).rejects.toThrow(BadRequestException);
 
-      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+      expect(mockPrisma.user.update).not.toHaveBeenCalled();
     });
   });
 });

@@ -1,4 +1,4 @@
-
+// src/modules/auths/auths.controller.ts
 import {
   Body,
   Controller,
@@ -29,7 +29,7 @@ import { ForgotPasswordDto }    from './dto/forgot-password.dto';
 import { ResetPasswordDto }     from './dto/reset-password.dto';
 import { VerifyOtpDto }         from './dto/verify-dto';
 import { AdminService }         from '../admin/admin.service';
-import { RegisterWithInviteDto } from './dto/register-invite.dto';
+import { FieldRegisterWithInviteDto } from './dto/register-invite.dto';
 import {
   AuthTokensResponse,
   LoginDto,
@@ -417,17 +417,58 @@ export class AuthController {
   @Post('register/invite')
   @Public()
   @HttpCode(HttpStatus.CREATED)
-  @UseInterceptors(FileInterceptor('profilePicture'))
+  @UseInterceptors(
+    FileInterceptor('profilePicture', {
+      limits: { fileSize: MAX_PROFILE_PICTURE_BYTES },
+      fileFilter: imageFileFilter,
+    }),
+  )
   @ApiOperation({
-    summary: 'Register using an invite token (Tier 5 & 6)',
+    summary: 'Register using an invite token (field agents Tier 1–4)',
     description:
-      'Back-office staff self-register using an invite link sent by the System Admin. ' +
-      'Role, team and warehouse are locked to the invite — the user cannot change them.',
+      'Field agents (Merchandiser → Zonal Sales Manager) self-register using an invite link ' +
+      'sent by their direct superior. Role, team and warehouse location are locked to the invite. ' +
+      'The registrant provides their Nigerian **state** so the system can auto-assign their region. ' +
+      'An ID card is queued for generation immediately after registration.',
   })
   @ApiConsumes('multipart/form-data')
-  @ApiBody({ type: RegisterWithInviteDto })
+  @ApiBody({
+    description: 'Invite-based registration payload — send as multipart/form-data',
+    schema: {
+      type: 'object',
+      required: ['inviteToken', 'email', 'fullName', 'phone', 'password', 'dateOfBirth', 'state'],
+      properties: {
+        inviteToken:    { type: 'string', example: 'abc123xyz...', description: 'The token from the invite link' },
+        email:          { type: 'string', format: 'email', example: 'adaeze.okonkwo@darvinks.com', description: 'Must match the email the invite was sent to' },
+        fullName:       { type: 'string', example: 'Adaeze Okonkwo' },
+        phone:          { type: 'string', example: '+2348055555555' },
+        password:       { type: 'string', minLength: 8, example: 'SecurePass123!' },
+        dateOfBirth:    { type: 'string', format: 'date', example: '1990-03-15' },
+        state:          { type: 'string', example: 'Cross River', description: 'Nigerian state the agent operates in — auto-assigns region' },
+        annualTargets:  { type: 'object', example: { LOTION: 500, SOAP: 300, CREAM: 200, MAINTENANCE: 100 }, description: 'Optional — can be set later by Admin' },
+        profilePicture: { type: 'string', format: 'binary', description: 'Optional profile photo — JPEG or PNG, max 5 MB. Appears on the generated ID card.' },
+      },
+    },
+  })
+  @ApiResponse({
+    status: 201,
+    description: 'Registration successful',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          userId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
+          employeeRef: 'Dar-00000042',
+          message: 'Registration successful. Your digital ID card will be ready shortly.',
+        },
+        timestamp: '2026-04-15T08:30:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 400, description: 'Invalid / expired invite token, or email mismatch' })
+  @ApiResponse({ status: 409, description: 'Email or phone number already registered' })
   async registerWithInvite(
-    @Body() dto: RegisterWithInviteDto,
+    @Body() dto: FieldRegisterWithInviteDto,
     @UploadedFile() profilePicture?: Express.Multer.File,
   ) {
     return this.authService.registerWithInvite(dto, profilePicture);

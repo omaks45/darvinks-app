@@ -1,37 +1,40 @@
 
 import { ApiProperty, ApiPropertyOptional } from '@nestjs/swagger';
-import {
-    IsEmail,
-    IsEnum,
-    IsOptional,
-    IsString,
-} from 'class-validator';
-import { Team, WarehouseLocation } from '@prisma/client';
+import { IsEmail, IsEnum, IsOptional, IsString } from 'class-validator';
+import { WarehouseLocation } from '@prisma/client';
+import { UserRole } from '@common/utils/role.utils';
 
-// Only back-office roles can be invited — field staff self-register via mobile
-export enum InvitableRole {
-    SALES_HEAD      = 'SALES_HEAD',
-    SYSTEM_ADMIN    = 'SYSTEM_ADMIN',
-    WAREHOUSE_ADMIN = 'WAREHOUSE_ADMIN',
-    GENERAL_MANAGER = 'GENERAL_MANAGER',
-}
-
+/**
+ * DTO for the invite endpoint used by FIELD TIER inviters
+ * (TIER5_SALES_HEAD, TIER4, TIER3, TIER2).
+ *
+ * Team is automatically inherited from the inviter — the caller never sends it.
+ * warehouseLocation is only relevant for WAREHOUSE_ADMIN, which is
+ * provisioned directly by System Admin (not via this flow).
+ *
+ * Roles the caller is allowed to invite are validated inside AdminService
+ * based on the inviter's tier — not here, to keep the DTO generic.
+ */
 export class CreateInviteDto {
-    @ApiProperty({ example: 'adaeze@darvinks.com' })
+    @ApiProperty({
+        example: 'kenny.solape@darvinks.com',
+        description: 'Email address of the person being invited',
+    })
     @IsEmail()
     email: string;
 
-    @ApiProperty({ enum: InvitableRole, example: 'SALES_HEAD' })
-    @IsEnum(InvitableRole)
-    role: InvitableRole;
-
-    @ApiPropertyOptional({
-        enum: Team,
-        description: 'Required for SALES_HEAD — one per team',
+    @ApiProperty({
+        enum: UserRole,
+        example: UserRole.MERCHANDISER,
+        description:
+        'Role to assign. Must be in the tier directly below the inviter\'s own tier. ' +
+        'TIER5_SALES_HEAD → ZONAL_SALES_MANAGER | ' +
+        'TIER4 → ATSM, TSM | ' +
+        'TIER3 → SALES_REPRESENTATIVE, SSR | ' +
+        'TIER2 → MERCHANDISER, PROMOTER, DBSR, VSR',
     })
-    @IsOptional()
-    @IsEnum(Team)
-    team?: Team;
+    @IsEnum(UserRole)
+    role: string;
 
     @ApiPropertyOptional({
         enum: WarehouseLocation,

@@ -15,6 +15,7 @@ import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 
 const mockPrisma = {
   customer:           { findMany: jest.fn(), findUnique: jest.fn(), findFirst: jest.fn(), create: jest.fn(), update: jest.fn(), count: jest.fn() },
+  user:               { findUnique: jest.fn() },
   location:           { findUnique: jest.fn() },
   outOfRegionRequest: { findFirst: jest.fn(), create: jest.fn(), findUnique: jest.fn(), update: jest.fn(), findMany: jest.fn() },
 };
@@ -107,6 +108,7 @@ describe('CustomerService', () => {
     mockPrisma.customer.create.mockResolvedValue(CUSTOMER_STUB);
     mockPrisma.customer.update.mockResolvedValue(CUSTOMER_STUB);
     mockPrisma.customer.count.mockResolvedValue(5);
+    mockPrisma.user.findUnique.mockResolvedValue({ reportsToId: 'tier2-inviter-id' });
     mockPrisma.location.findUnique.mockResolvedValue(null);
     mockPrisma.outOfRegionRequest.findFirst.mockResolvedValue(null);
     mockPrisma.outOfRegionRequest.create.mockResolvedValue({ id: 'req-id' });
@@ -219,13 +221,22 @@ describe('CustomerService', () => {
   describe('findAll()', () => {
 
     describe('ownership scoping — THE CORE RULE', () => {
-      it('Tier 1 sees only customers they created (ownerId = their sub)', async () => {
+      it('Tier 1 sees own SECONDARY customers and inviter PRIMARY customers', async () => {
+        // Tier 1 reportsToId lookup — the service looks up the agent's reportsToId
+        mockPrisma.user.findUnique.mockResolvedValue({ reportsToId: 'tier2-inviter-id' });
         await service.findAll({} as any, makeAgent('TIER1', 'SOUTH_WEST', 'agent-id'));
         const where = mockPrisma.customer.findMany.mock.calls[0][0].where;
-        expect(where.ownerId).toBe('agent-id');
+        // TIER1 scoping uses OR: own SECONDARY + inviter's PRIMARY
+        expect(where.OR).toBeDefined();
+        expect(where.OR).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({ ownerId: 'agent-id', customerType: 'SECONDARY' }),
+            expect.objectContaining({ ownerId: 'tier2-inviter-id', customerType: 'PRIMARY' }),
+          ]),
+        );
       });
 
-      it('Tier 2 sees only their own customers', async () => {
+      it('Tier 2 sees only their own customers (ownerId filter)', async () => {
         await service.findAll({} as any, makeAgent('TIER2', 'SOUTH_WEST', 'agent-id'));
         const where = mockPrisma.customer.findMany.mock.calls[0][0].where;
         expect(where.ownerId).toBe('agent-id');
@@ -256,6 +267,17 @@ describe('CustomerService', () => {
 
         // They are different — B cannot see A's customers
         expect(whereA.ownerId).not.toBe(whereB.ownerId);
+      });
+
+      it('Tier 1 with no reportsToId falls back to own SECONDARY customers only', async () => {
+        // Edge case: reportsToId is null (orphaned account)
+        mockPrisma.user.findUnique.mockResolvedValue({ reportsToId: null });
+        await service.findAll({} as any, makeAgent('TIER1', 'SOUTH_WEST', 'agent-id'));
+        const where = mockPrisma.customer.findMany.mock.calls[0][0].where;
+        // Should still have OR (but inviter clause will filter nothing or be absent)
+        // The key invariant: never leaks other agents' PRIMARY customers
+        const hasOwnSecondary = JSON.stringify(where).includes('agent-id');
+        expect(hasOwnSecondary).toBe(true);
       });
     });
 

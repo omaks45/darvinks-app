@@ -1,4 +1,4 @@
-
+// src/modules/analytics/analytics.controller.ts
 import {
   Controller, ForbiddenException, Get, Post, Query, Res, UseGuards,
 } from '@nestjs/common';
@@ -6,14 +6,13 @@ import { Response } from 'express';
 import {
   ApiBearerAuth, ApiOperation, ApiQuery, ApiResponse, ApiTags,
 } from '@nestjs/swagger';
-import { IsEnum, IsOptional, IsString, Matches } from 'class-validator';
-import { ApiPropertyOptional } from '@nestjs/swagger';
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import { AnalyticsService } from './analytics.service';
 import { ReportGeneratorService } from './report-generator.service';
 import { AnalyticsScheduler } from './jobs/analytics.scheduler';
+import type { AdminSummaryFilters } from './analytics.service';
 
 // PPT: all tiers access the download. Field staff get personal scope,
 // privileged tiers get org-wide scope.
@@ -24,6 +23,12 @@ const ORG_SCOPE_TIERS = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD', 'TIER6_GM'];
 // need — GM's dashboard and the PPT org summary already give them the
 // aggregate picture they need.
 const EXCEL_TIERS = ['TIER5_SYSTEM_ADMIN', 'TIER5_SALES_HEAD'];
+
+// Admin summary: TIER5_SALES_SUPPORT (ops monitoring) + TIER6_GM (exec overview).
+const ADMIN_SUMMARY_TIERS = ['TIER5_SALES_SUPPORT', 'TIER6_GM'];
+
+// Field tiers that may call the field dashboard endpoint.
+const FIELD_DASHBOARD_TIERS = ['TIER1', 'TIER2', 'TIER3', 'TIER4'];
 
 type PeriodType = 'weekly' | 'monthly' | 'quarterly' | 'annual';
 
@@ -222,8 +227,6 @@ export class AnalyticsController {
   // ── Personal / chain analytics summary ─────────────────────────────────────
 
   @Get('summary')
-  @UseGuards(JwtAuthGuard)
-  @ApiBearerAuth('access-token')
   @ApiOperation({
     summary: 'Personal analytics summary — bar chart, pie chart, totals',
     description:
@@ -259,6 +262,105 @@ export class AnalyticsController {
       includeChain === 'true',
     );
 
+    return res.json({ success: true, data, timestamp: new Date().toISOString() });
+  }
+
+  // ── Admin summary (TIER5_SALES_SUPPORT + TIER6_GM) ─────────────────────────
+
+  @Get('admin-summary')
+  @ApiOperation({
+    summary: 'Org-wide KPI summary for ops and executive roles',
+    description:
+      'Returns aggregate KPIs across the entire organisation (or filtered subset): ' +
+      'total collections received (kobo), total approved purchase orders, ' +
+      'and total approved PO value (kobo). ' +
+      '\n\nAll filters are optional and combinable. ' +
+      'When no filters are applied the response covers the whole org with no date limit. ' +
+      '\n\nAccess: TIER5_SALES_SUPPORT (ops monitoring) and TIER6_GM (executive overview).',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Aggregate KPIs',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          totalCollectionsKobo: 12500000,
+          totalSalesCount:      47,
+          totalSalesValueKobo:  38200000,
+        },
+        timestamp: '2026-09-25T10:00:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Only TIER5_SALES_SUPPORT and TIER6_GM can access this endpoint' })
+  @ApiQuery({ name: 'team',   required: false, description: 'Filter by team (e.g. PEPSICO, DANO, OLAM, …)' })
+  @ApiQuery({ name: 'region', required: false, description: 'Filter by region (e.g. SOUTH_WEST, NORTH_CENTRAL, …)' })
+  @ApiQuery({ name: 'tier',   required: false, description: 'Filter by user tier (TIER1 – TIER4, TIER5_SALES_HEAD, …)' })
+  @ApiQuery({ name: 'from',   required: false, description: 'ISO date string (inclusive lower bound on record date). E.g. 2026-01-01' })
+  @ApiQuery({ name: 'to',     required: false, description: 'ISO date string (exclusive upper bound on record date). E.g. 2026-10-01' })
+  async getAdminSummary(
+    @Query('team')   team:   string | undefined,
+    @Query('region') region: string | undefined,
+    @Query('tier')   tier:   string | undefined,
+    @Query('from')   from:   string | undefined,
+    @Query('to')     to:     string | undefined,
+    @CurrentUser()   user:   JwtPayload,
+    @Res()           res:    Response,
+  ) {
+    if (!ADMIN_SUMMARY_TIERS.includes(user.tier as string)) {
+      throw new ForbiddenException(
+        'Only TIER5_SALES_SUPPORT and TIER6_GM can access the admin summary',
+      );
+    }
+
+    const filters: AdminSummaryFilters = {
+      ...(team   ? { team:   team   as any } : {}),
+      ...(region ? { region: region as any } : {}),
+      ...(tier   ? { tier:   tier   as any } : {}),
+      ...(from   ? { from } : {}),
+      ...(to     ? { to }   : {}),
+    };
+
+    const data = await this.analyticsService.getAdminSummary(filters);
+    return res.json({ success: true, data, timestamp: new Date().toISOString() });
+  }
+
+  // ── Field dashboard (TIER1–TIER4) — auto-rollup for managers ───────────────
+
+  @Get('field-dashboard')
+  @ApiOperation({
+    summary: 'Field agent dashboard — personal stats or chain rollup',
+    description:
+      'Returns analytics data scoped to the requesting field agent. ' +
+      '\n\n**TIER1** receives only their own data. ' +
+      '\n\n**TIER2–TIER4** automatically receive a rollup of their entire reporting subtree ' +
+      '(themselves + all subordinates at every level below them), so a TIER3 manager ' +
+      'sees aggregated data for all TIER2 and TIER1 staff who report up through them. ' +
+      '\n\nPeriod types: weekly (2026-W35), monthly (2026-08), quarterly (2026-Q3), annual (2026). ' +
+      'Defaults to the current month.',
+  })
+  @ApiResponse({
+    status: 200,
+    description: 'Field analytics data (same shape as GET /analytics/summary)',
+  })
+  @ApiResponse({ status: 403, description: 'Only field agents (TIER1–TIER4) may use this endpoint' })
+  @ApiQuery({ name: 'periodType', required: false, enum: ['weekly', 'monthly', 'quarterly', 'annual'], description: 'Defaults to monthly' })
+  @ApiQuery({ name: 'period',     required: false, description: 'Period string matching the periodType. Defaults to the current period.' })
+  async getFieldDashboard(
+    @Query('periodType') periodType: PeriodType = 'monthly',
+    @Query('period')     period: string | undefined,
+    @CurrentUser()       user: JwtPayload,
+    @Res()               res: Response,
+  ) {
+    if (!FIELD_DASHBOARD_TIERS.includes(user.tier as string)) {
+      throw new ForbiddenException('Only field agents (TIER1–TIER4) may use this endpoint');
+    }
+
+    const resolvedType   = this.normalizePeriodType(periodType);
+    const resolvedPeriod = period ?? PERIOD_DEFAULTS[resolvedType]();
+
+    const data = await this.analyticsService.getFieldDashboard(user, resolvedPeriod, resolvedType);
     return res.json({ success: true, data, timestamp: new Date().toISOString() });
   }
 

@@ -53,10 +53,19 @@ const mockMail = {
 
 // ─── Fixtures ─────────────────────────────────────────────────────────────────
 
+/** TIER5_SALES_SUPPORT — can provision users, but NOT in FIELD_TIER_INVITE_MAP */
 const SALES_SUPPORT_REQUESTER: JwtPayload = {
   sub:   'admin-uuid',
   email: 'admin@darvinks.com',
   tier:  'TIER5_SALES_SUPPORT' as any,
+  team:  'BRIGHT' as any,
+};
+
+/** TIER5_SALES_HEAD — IS in FIELD_TIER_INVITE_MAP; can send field agent invites */
+const SALES_HEAD_REQUESTER: JwtPayload = {
+  sub:   'sh-uuid',
+  email: 'sh@darvinks.com',
+  tier:  'TIER5_SALES_HEAD' as any,
   team:  'BRIGHT' as any,
 };
 
@@ -1004,59 +1013,49 @@ describe('AdminService', () => {
 
   // ══════════════════════════════════════════════════════════════════════════
   // createInvite()
+  // Field agent invite chain: TIER5_SALES_HEAD → TIER4 → TIER3 → TIER2 → TIER1
+  // FIELD_TIER_INVITE_MAP: TIER5_SALES_HEAD, TIER4, TIER3, TIER2 can invite
+  // TIER5_SALES_SUPPORT is NOT in the map — cannot create field invites
   // ══════════════════════════════════════════════════════════════════════════
 
   describe('createInvite()', () => {
+    /**
+     * DTO shape: only email + role. Team is auto-locked from the requester's
+     * team — the client never sends it.
+     *
+     * TIER5_SALES_HEAD → ZONAL_SALES_MANAGER (the only role in its allowed set)
+     */
     const INVITE_DTO = {
       email: 'adaeze@darvinks.com',
-      role:  'SALES_HEAD' as any,
-      team:  'BRIGHT' as any,
+      role:  'ZONAL_SALES_MANAGER' as any,
     };
 
-    it('throws ForbiddenException when requester is not TIER5_SALES_SUPPORT', async () => {
+    it('throws ForbiddenException when requester tier is not in FIELD_TIER_INVITE_MAP', async () => {
+      // TIER5_SALES_SUPPORT is NOT allowed to create field invites
       await expect(
-        service.createInvite(NON_ADMIN_REQUESTER, INVITE_DTO),
+        service.createInvite(SALES_SUPPORT_REQUESTER, INVITE_DTO),
       ).rejects.toThrow(ForbiddenException);
     });
 
-    it('throws ConflictException when email is already registered', async () => {
-      mockPrisma.user.findUnique.mockResolvedValue({ id: 'existing-user' });
-
+    it('throws ForbiddenException when TIER2 tries to invite a role above their allowed set', async () => {
+      // TIER2 can only invite TIER1 roles (e.g. MERCHANDISER, PROMOTER, etc.)
+      // Attempting to invite ZONAL_SALES_MANAGER (a TIER4 role) must be rejected
       await expect(
-        service.createInvite(SALES_SUPPORT_REQUESTER, INVITE_DTO),
-      ).rejects.toThrow(ConflictException);
-    });
-
-    it('throws BadRequestException when SALES_HEAD invite is missing team', async () => {
-      mockPrisma.user.findUnique.mockResolvedValue(null);
-
-      await expect(
-        service.createInvite(SALES_SUPPORT_REQUESTER, {
-          ...INVITE_DTO,
-          team: undefined,
+        service.createInvite(NON_ADMIN_REQUESTER, {
+          email: 'test@darvinks.com',
+          role:  'ZONAL_SALES_MANAGER' as any,
         }),
-      ).rejects.toThrow(BadRequestException);
+      ).rejects.toThrow(ForbiddenException);
     });
 
-    it('throws BadRequestException when WAREHOUSE_ADMIN invite is missing warehouseLocation', async () => {
-      mockPrisma.user.findUnique.mockResolvedValue(null);
-
-      await expect(
-        service.createInvite(SALES_SUPPORT_REQUESTER, {
-          email: 'wa@darvinks.com',
-          role:  'WAREHOUSE_ADMIN' as any,
-        }),
-      ).rejects.toThrow(BadRequestException);
-    });
-
-    it('creates invite and returns token + expiresAt', async () => {
-      mockPrisma.user.findUnique.mockResolvedValue(null);
+    it('TIER5_SALES_HEAD can create an invite for an allowed role', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(null);      // email not taken
       mockPrisma.inviteToken.updateMany.mockResolvedValue({ count: 0 });
       mockPrisma.inviteToken.create.mockResolvedValue({ id: 'invite-id' });
       mockMail.sendInviteEmail.mockResolvedValue(undefined);
 
       const result = await service.createInvite(
-        SALES_SUPPORT_REQUESTER,
+        SALES_HEAD_REQUESTER,
         INVITE_DTO,
       );
 
@@ -1065,12 +1064,33 @@ describe('AdminService', () => {
       expect(result.message).toContain(INVITE_DTO.email);
     });
 
+    it('team is auto-locked from requester — not set by client', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      mockPrisma.inviteToken.updateMany.mockResolvedValue({ count: 0 });
+      mockPrisma.inviteToken.create.mockResolvedValue({ id: 'invite-id' });
+      mockMail.sendInviteEmail.mockResolvedValue(undefined);
+
+      await service.createInvite(SALES_HEAD_REQUESTER, INVITE_DTO);
+
+      const createData = mockPrisma.inviteToken.create.mock.calls[0][0].data;
+      // Team must come from the requester's team, not from the DTO
+      expect(createData.team).toBe(SALES_HEAD_REQUESTER.team);
+    });
+
+    it('throws ConflictException when email is already registered', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ id: 'existing-user' });
+
+      await expect(
+        service.createInvite(SALES_HEAD_REQUESTER, INVITE_DTO),
+      ).rejects.toThrow(ConflictException);
+    });
+
     it('invalidates previous unused invites for the same email', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(null);
       mockPrisma.inviteToken.updateMany.mockResolvedValue({ count: 1 });
       mockPrisma.inviteToken.create.mockResolvedValue({ id: 'invite-id' });
 
-      await service.createInvite(SALES_SUPPORT_REQUESTER, INVITE_DTO);
+      await service.createInvite(SALES_HEAD_REQUESTER, INVITE_DTO);
 
       expect(mockPrisma.inviteToken.updateMany).toHaveBeenCalledWith({
         where: { email: INVITE_DTO.email, isUsed: false },
@@ -1084,16 +1104,28 @@ describe('AdminService', () => {
       mockPrisma.inviteToken.create.mockResolvedValue({ id: 'invite-id' });
       mockMail.sendInviteEmail.mockResolvedValue(undefined);
 
-      await service.createInvite(SALES_SUPPORT_REQUESTER, INVITE_DTO);
+      await service.createInvite(SALES_HEAD_REQUESTER, INVITE_DTO);
 
       await new Promise(resolve => setImmediate(resolve));
 
       expect(mockMail.sendInviteEmail).toHaveBeenCalledWith(
         expect.objectContaining({
           to:        INVITE_DTO.email,
-          roleLabel: 'Sales Head',
+          roleLabel: 'Zonal Sales Manager',
         }),
       );
+    });
+
+    it('sets createdById on the invite token so registrant inherits reportsToId', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(null);
+      mockPrisma.inviteToken.updateMany.mockResolvedValue({ count: 0 });
+      mockPrisma.inviteToken.create.mockResolvedValue({ id: 'invite-id' });
+      mockMail.sendInviteEmail.mockResolvedValue(undefined);
+
+      await service.createInvite(SALES_HEAD_REQUESTER, INVITE_DTO);
+
+      const createData = mockPrisma.inviteToken.create.mock.calls[0][0].data;
+      expect(createData.createdById).toBe(SALES_HEAD_REQUESTER.sub);
     });
   });
 
