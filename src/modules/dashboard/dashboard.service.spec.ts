@@ -4,7 +4,7 @@ import { DashboardService } from './dashboard.service';
 import { PrismaService } from '@common/prisma/prisma.service';
 import { AttendanceService } from '@modules/attendance/attendance.service';
 import { TargetAssignmentService } from '@modules/target-assignment/target-assignment.service';
-import { SecondarySaleService } from '@modules/seconday-sales/seconday-sales.service';
+import { SecondaySalesService } from '@modules/seconday-sales/seconday-sales.service';
 import { CompetitorReportService } from '@modules/competitor-report/competitor-report.service';
 import { PurchaseOrderService } from '@modules/purchase/purchase.service';
 import { CustomerService } from '@modules/customer/customer.service';
@@ -115,7 +115,7 @@ describe('DashboardService', () => {
         { provide: PrismaService,           useValue: mockPrisma },
         { provide: AttendanceService,       useValue: mockAttendance },
         { provide: TargetAssignmentService, useValue: mockTargets },
-        { provide: SecondarySaleService,    useValue: mockSecondarySales },
+        { provide: SecondaySalesService,    useValue: mockSecondarySales },
         { provide: CompetitorReportService, useValue: mockCompetitorReports },
         { provide: PurchaseOrderService,    useValue: mockPurchaseOrders },
         { provide: CustomerService,         useValue: mockCustomers },

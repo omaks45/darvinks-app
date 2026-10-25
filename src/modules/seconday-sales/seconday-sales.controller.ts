@@ -1,79 +1,185 @@
-// src/modules/secondary-sales/secondary-sale.controller.ts
+// src/modules/seconday-sales/seconday-sales.controller.ts
 import {
-  Body,
   Controller,
   Get,
-  HttpCode,
-  HttpStatus,
   Param,
-  ParseUUIDPipe,
-  Post,
   Query,
   UseGuards,
 } from '@nestjs/common';
 import {
   ApiBearerAuth,
-  ApiBody,
   ApiOperation,
   ApiParam,
+  ApiQuery,
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
+
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
-import { ClockInGuard } from '@common/guards/clock-in.guard';
+import { Roles } from '@common/decorators/roles.decorator';
+import { RolesGuard } from '@common/guards/roles.guard';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
-import { SecondarySaleService } from './seconday-sales.service';
-import { CreateSecondarySaleDto, SecondarySaleQueryDto } from './dto/seconday-sale.dto';
+import { SecondaySalesService, PaginatedResult } from './seconday-sales.service';
 
 @ApiTags('Secondary Sales')
-@ApiBearerAuth('access-token')
+@ApiBearerAuth()
 @UseGuards(JwtAuthGuard)
 @Controller('secondary-sales')
-export class SecondarySaleController {
-  constructor(private readonly secondarySaleService: SecondarySaleService) {}
+export class SecondaySalesController {
+  constructor(private readonly secondaySalesService: SecondaySalesService) {}
 
-  @ApiResponse({ status: 201, description: 'Secondary sale logged. GPS address auto-resolved. Clock-in required.', schema: { example: { success: true, data: { id: 'sale-id', userId: 'agent-id', kdAccountId: 'cust-id', latitude: 6.5244, longitude: 3.3792, address: '12 Kolade Street, Ilupeju, Lagos', deviceTime: '2026-07-29T10:30:00.000Z', serverTime: '2026-07-29T10:30:02.000Z', note: null, items: [{ id: 'item-id', productId: 'prod-id', product: { name: 'Visita Essence B Whitening Lotion (250ml)', category: 'LOTION' }, buyerType: 'WHOLESALER', quantityCartons: 5 }], createdAt: '2026-07-29T10:30:02.000Z' }, timestamp: '2026-07-29T12:00:00.000Z' } } })
-  @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-07-29T12:00:00.000Z' } } })
-  @ApiResponse({ status: 403, description: 'Not clocked in today', schema: { example: { success: false, statusCode: 403, message: 'You must clock in before performing this action', timestamp: '2026-07-29T12:00:00.000Z' } } })
-  @Post()
-  @HttpCode(HttpStatus.CREATED)
-  @UseGuards(ClockInGuard) // must have clocked in today — absent staff cannot log sales
+  // ─── TIER5_SALES_SUPPORT: All Secondary Sales (platform-wide) ────────────
+
+  /**
+   * GET /secondary-sales/support/all
+   *
+   * Platform-wide secondary sales for TIER5_SALES_SUPPORT.
+   * Filterable by team, tier, region, userId, from, to.
+   *
+   * NOTE: This route MUST be registered before GET /secondary-sales/:id so
+   * NestJS does not mistakenly treat "support" as a sale UUID.
+   */
+  @Get('support/all')
+  @Roles('TIER5_SALES_SUPPORT')
+  @UseGuards(RolesGuard)
   @ApiOperation({
-    summary: 'Log a secondary sale (Tier 1-4 only, requires clock-in today)',
+    summary: 'All secondary sales — platform-wide (Sales Support only)',
     description:
-      'Records sales witnessed/made at a KD location to sub-distributors, ' +
-      'wholesalers, or retailers. Blocked if the field agent has not clocked in today.',
+      'Returns all secondary sales records across the platform. ' +
+      'Filter by team, tier, region, userId, or date range. ' +
+      'Restricted to TIER5_SALES_SUPPORT.',
   })
-  @ApiBody({ type: CreateSecondarySaleDto })
-  create(
-    @Body() dto: CreateSecondarySaleDto,
+  @ApiQuery({ name: 'team',   required: false, description: 'Filter by team (e.g. RADIANT)' })
+  @ApiQuery({ name: 'tier',   required: false, description: 'Filter by user tier (e.g. TIER2)' })
+  @ApiQuery({ name: 'region', required: false, description: 'Filter by region (e.g. SOUTH_WEST)' })
+  @ApiQuery({ name: 'userId', required: false, description: 'Filter by a specific user UUID' })
+  @ApiQuery({ name: 'from',   required: false, description: 'Start date inclusive — ISO 8601 (e.g. 2026-08-01)' })
+  @ApiQuery({ name: 'to',     required: false, description: 'End date inclusive — ISO 8601 (e.g. 2026-08-31)' })
+  @ApiQuery({ name: 'page',   required: false, type: Number, description: 'Page number (default: 1)' })
+  @ApiQuery({ name: 'limit',  required: false, type: Number, description: 'Results per page, max 100 (default: 20)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated platform-wide secondary sales',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          data: [
+            {
+              id: 'sale-uuid',
+              userId: 'user-uuid',
+              kdAccountId: 'customer-uuid',
+              latitude: 6.5244,
+              longitude: 3.3792,
+              deviceTime: '2026-08-02T10:00:00.000Z',
+              serverTime: '2026-08-02T10:00:02.000Z',
+              note: null,
+              createdAt: '2026-08-02T10:00:02.000Z',
+              user: { id: 'user-uuid', fullName: 'Emeka Obi', employeeRef: 'Dar-00000003', role: 'MERCHANDISER', tier: 'TIER2', team: 'RADIANT', region: 'SOUTH_WEST' },
+              kdAccount: { id: 'customer-uuid', businessName: 'Ore Ofe Distributors' },
+              items: [
+                {
+                  id: 'item-uuid',
+                  productId: 'product-uuid',
+                  buyerType: 'DISTRIBUTOR',
+                  quantityCartons: 10,
+                  quantityRows: 0,
+                  quantityPieces: 0,
+                  product: { id: 'product-uuid', name: 'Hollandia Yoghurt 500ml', sku: 'HY-500' },
+                },
+              ],
+            },
+          ],
+          meta: { total: 320, page: 1, limit: 20, totalPages: 16 },
+        },
+        timestamp: '2026-08-02T12:00:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: 'Forbidden — TIER5_SALES_SUPPORT only' })
+  getSupportAllSales(
     @CurrentUser() user: JwtPayload,
+    @Query() query: {
+      team?: string; tier?: string; region?: string; userId?: string;
+      from?: string; to?: string; page?: number; limit?: number;
+    },
   ) {
-    return this.secondarySaleService.create(dto, user);
+    return this.secondaySalesService.findAllForSupport(query, user);
   }
 
-  @ApiResponse({ status: 200, description: 'Secondary sales history. Field staff see their own. Admins see all.', schema: { example: { success: true, data: [{ id: 'sale-id', userId: 'agent-id', kdAccountId: 'cust-id', address: '12 Kolade Street, Ilupeju, Lagos', deviceTime: '2026-07-29T10:30:00.000Z', items: [{ productId: 'prod-id', product: { name: 'Visita Essence B Whitening Lotion (250ml)', category: 'LOTION' }, buyerType: 'WHOLESALER', quantityCartons: 5 }], createdAt: '2026-07-29T10:30:02.000Z' }], timestamp: '2026-07-29T12:00:00.000Z' } } })
-  @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-07-29T12:00:00.000Z' } } })
+  // ─── TIER5_SALES_SUPPORT: Sales by User ───────────────────────────────────
+
+  /**
+   * GET /secondary-sales/support/user/:userId
+   *
+   * Full secondary sales history for any specific user.
+   * TIER5_SALES_SUPPORT only.
+   */
+  @Get('support/user/:userId')
+  @Roles('TIER5_SALES_SUPPORT')
+  @UseGuards(RolesGuard)
+  @ApiOperation({
+    summary: "Get a specific user's secondary sales (Sales Support only)",
+    description:
+      'Returns all secondary sales submitted by the given user. ' +
+      'Optionally filter by date range. ' +
+      'Restricted to TIER5_SALES_SUPPORT.',
+  })
+  @ApiParam({ name: 'userId', description: 'UUID of the target field agent' })
+  @ApiQuery({ name: 'from',  required: false, description: 'Start date inclusive — ISO 8601' })
+  @ApiQuery({ name: 'to',    required: false, description: 'End date inclusive — ISO 8601' })
+  @ApiQuery({ name: 'page',  required: false, type: Number })
+  @ApiQuery({ name: 'limit', required: false, type: Number })
+  @ApiResponse({ status: 200, description: "Paginated secondary sales for the target user" })
+  @ApiResponse({ status: 403, description: 'Forbidden — TIER5_SALES_SUPPORT only' })
+  getSupportSalesByUser(
+    @Param('userId') userId: string,
+    @CurrentUser() user: JwtPayload,
+    @Query() query: { from?: string; to?: string; page?: number; limit?: number },
+  ) {
+    return this.secondaySalesService.findByUserForSupport(userId, query, user);
+  }
+
+  // ─── List all (own or by ?userId for oversight) ───────────────────────────
+
   @Get()
   @ApiOperation({
     summary: 'List secondary sales',
-    description: 'Field staff see only their own. Admins see all.',
+    description:
+      'Field agents see their own sales only. ' +
+      'Oversight roles can optionally filter by ?userId.',
   })
+  @ApiQuery({ name: 'userId', required: false, description: 'Filter by user — oversight roles only' })
+  @ApiQuery({ name: 'from',   required: false, description: 'Start date inclusive — ISO 8601' })
+  @ApiQuery({ name: 'to',     required: false, description: 'End date inclusive — ISO 8601' })
+  @ApiQuery({ name: 'page',   required: false, type: Number })
+  @ApiQuery({ name: 'limit',  required: false, type: Number })
+  @ApiResponse({ status: 200, description: 'Paginated secondary sales' })
   findAll(
-    @Query() query: SecondarySaleQueryDto,
     @CurrentUser() user: JwtPayload,
+    @Query() query: { userId?: string; from?: string; to?: string; page?: number; limit?: number },
   ) {
-    return this.secondarySaleService.findAll(query, user);
+    return this.secondaySalesService.findAll(query, user);
   }
 
+  // ─── Get one ──────────────────────────────────────────────────────────────
+
   @Get(':id')
-  @ApiParam({ name: 'id', type: 'string', format: 'uuid' })
-  @ApiOperation({ summary: 'Get a single secondary sale by ID' })
-  findById(
-    @Param('id', ParseUUIDPipe) id: string,
+  @ApiOperation({
+    summary: 'Get a single secondary sale by ID',
+    description:
+      'Field agents can only fetch their own sales. ' +
+      'Oversight roles can fetch any sale.',
+  })
+  @ApiParam({ name: 'id', description: 'UUID of the secondary sale' })
+  @ApiResponse({ status: 200, description: 'Secondary sale record' })
+  @ApiResponse({ status: 403, description: 'Field agents cannot view other users\' sales' })
+  @ApiResponse({ status: 404, description: 'Sale not found' })
+  findOne(
+    @Param('id') id: string,
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.secondarySaleService.findById(id, user);
+    return this.secondaySalesService.findById(id, user);
   }
 }

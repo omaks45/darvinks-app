@@ -21,7 +21,7 @@ import { PrismaService } from '@common/prisma/prisma.service';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import { AttendanceService } from '@modules/attendance/attendance.service';
 import { TargetAssignmentService } from '@modules/target-assignment/target-assignment.service';
-import { SecondarySaleService } from '@modules/seconday-sales/seconday-sales.service';
+import { SecondaySalesService } from '@modules/seconday-sales/seconday-sales.service';
 import { CompetitorReportService } from '@modules/competitor-report/competitor-report.service';
 import { PurchaseOrderService } from '@modules/purchase/purchase.service';
 import { CustomerService } from '@modules/customer/customer.service';
@@ -51,7 +51,7 @@ export class DashboardService {
     private readonly prisma:           PrismaService,
     private readonly attendance:       AttendanceService,
     private readonly targets:          TargetAssignmentService,
-    private readonly secondarySales:   SecondarySaleService,
+    private readonly secondarySales:   SecondaySalesService,
     private readonly competitorReports: CompetitorReportService,
     private readonly purchaseOrders:   PurchaseOrderService,
     private readonly customers:        CustomerService,

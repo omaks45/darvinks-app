@@ -28,7 +28,7 @@ import { CustomerModule } from '@modules/customer/customer.module';
 import { WarehouseModule } from '@modules/warehouse/warehouse.module';
 import { PurchaseOrderModule } from '@modules/purchase/purchase.module';
 import { CollectionModule } from '@modules/collections/collections.module';
-import { SecondarySaleModule } from '@modules/seconday-sales/seconday-sales.module';
+import { SecondaySalesModule } from '@modules/seconday-sales/seconday-sales.module';
 import { TargetAssignmentModule } from '@modules/target-assignment/target-assignment.module';
 import { CompetitorReportModule } from '@modules/competitor-report/competitor-report.module';
 import { DashboardModule } from '@modules/dashboard/dashboard.module';
@@ -97,7 +97,7 @@ function parsedRedisUrl() {
     WarehouseModule,
     PurchaseOrderModule,
     CollectionModule,
-    SecondarySaleModule,
+    SecondaySalesModule,
     StockCollectionModule,
     SecondarySaleInvoiceModule,
     KdLedgerModule,

@@ -4,7 +4,7 @@ import { DashboardController } from './dashboard.controller';
 import { DashboardService } from './dashboard.service';
 import { AttendanceModule } from '@modules/attendance/attendance.module';
 import { TargetAssignmentModule } from '@modules/target-assignment/target-assignment.module';
-import { SecondarySaleModule } from '@modules/seconday-sales/seconday-sales.module';
+import { SecondaySalesModule } from '@modules/seconday-sales/seconday-sales.module';
 import { CompetitorReportModule } from '@modules/competitor-report/competitor-report.module';
 import { PurchaseOrderModule } from '@modules/purchase/purchase.module';
 import { CollectionModule } from '@modules/collections/collections.module';
@@ -21,7 +21,7 @@ import { UsersModule } from '@modules/user/user.module';
   imports: [
     AttendanceModule,
     TargetAssignmentModule,
-    SecondarySaleModule,
+    SecondaySalesModule,
     CompetitorReportModule,
     PurchaseOrderModule,
     CollectionModule,

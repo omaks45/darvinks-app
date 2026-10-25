@@ -83,6 +83,11 @@ export class CreateSecondarySaleDto {
 }
 
 export class SecondarySaleQueryDto {
+    @ApiPropertyOptional({ description: 'Filter by user UUID' })
+    @IsOptional()
+    @IsUUID()
+    userId?: string;
+
     @ApiPropertyOptional({ description: 'Customer UUID' })
     @IsOptional()
     @IsUUID()

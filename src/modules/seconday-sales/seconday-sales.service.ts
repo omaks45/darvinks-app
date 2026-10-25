@@ -1,187 +1,286 @@
-
+// src/modules/seconday-sales/seconday-sales.service.ts
 import {
   BadRequestException,
   ForbiddenException,
   Injectable,
-  Logger,
   NotFoundException,
 } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
+
 import { PrismaService } from '@common/prisma/prisma.service';
 import { GoogleMapsService } from '@common/google/google-map.service';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
-import type {
-  CreateSecondarySaleDto,
-  SecondarySaleQueryDto,
-} from './dto/seconday-sale.dto';
+import type { CreateSecondarySaleDto, SecondarySaleQueryDto } from './dto/seconday-sale.dto';
 
-// Field tiers only — confirmed: any of Tier 1-4 may log a secondary sale,
-// not just Tier 1.
-const FIELD_TIERS = ['TIER1', 'TIER2', 'TIER3', 'TIER4'];
-const ADMIN_TIERS  = ['TIER5_SALES_SUPPORT', 'TIER5_SALES_HEAD', 'TIER6_GM'];
+// ─── Exported pagination type (used by controller return types) ───────────────
 
-const SALE_SELECT = {
-  id:         true,
-  userId:     true,
-  user:       { select: { fullName: true, employeeRef: true } },
-  kdAccountId: true,
-  kdAccount:  { select: { businessName: true, region: true } },
-  latitude:   true,
-  longitude:  true,
-  address:    true,
-  deviceTime: true,
-  serverTime: true,
-  note:       true,
-  createdAt:  true,
-  items: {
+export interface PaginatedResult<T> {
+  data: T[];
+  meta: { total: number; page: number; limit: number; totalPages: number };
+}
+
+// ─── Role constants ───────────────────────────────────────────────────────────
+
+/** Tiers that can submit secondary sales and see only their own records */
+const FIELD_TIERS = ['TIER1', 'TIER2', 'TIER3', 'TIER4'] as const;
+
+// ─── Common include shape ─────────────────────────────────────────────────────
+
+const SALE_INCLUDE = {
+  user: {
     select: {
-      id:              true,
-      productId:       true,
-      product:         { select: { name: true, category: true } },
-      buyerType:       true,
-      quantityCartons: true,
-      quantityRows:    true,
-      quantityPieces:  true,
+      id: true, fullName: true, employeeRef: true,
+      role: true, tier: true, team: true, region: true,
     },
   },
-} as const;
+  kdAccount: { select: { id: true, businessName: true } },
+  items: {
+    include: {
+      product: { select: { id: true, name: true } },
+    },
+  },
+} satisfies Prisma.SecondarySaleInclude;
 
 @Injectable()
-export class SecondarySaleService {
-  private readonly logger = new Logger(SecondarySaleService.name);
-
+export class SecondaySalesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly maps:   GoogleMapsService,
   ) {}
 
-  // ── Create ─────────────────────────────────────────────────────────────────
+  // ─── Create (field agents only) ───────────────────────────────────────────
 
-  async create(dto: CreateSecondarySaleDto, requester: JwtPayload) {
-    if (!FIELD_TIERS.includes(requester.tier as string)) {
+  /**
+   * POST /secondary-sales
+   *
+   * Only TIER1–TIER4 field agents may submit secondary sales.
+   * Validates that:
+   *  - The KD customer account exists and is active
+   *  - Every productId in items resolves to a known product
+   * Deduplicates product IDs so only one DB round-trip is needed.
+   */
+  async create(dto: CreateSecondarySaleDto, requester: JwtPayload): Promise<any> {
+    if (!FIELD_TIERS.includes(requester.tier as any)) {
       throw new ForbiddenException(
-        'Only field staff (Tier 1-4) can log secondary sales',
+        'Only field agents (Tier 1–4) can submit secondary sales',
       );
     }
 
-    // Validate kdAccountId against a real, active Customer — this was
-    // previously a loose string for offline flexibility, but that let
-    // typos and stale IDs silently corrupt achievement-vs-target rollups,
-    // so it's now checked the same way PurchaseOrderService validates
-    // customerId on PO creation.
+    // Validate KD customer
     const customer = await this.prisma.customer.findUnique({
-      where:  { id: dto.kdAccountId },
+      where: { id: dto.kdAccountId },
       select: { id: true, isActive: true, businessName: true },
     });
+
     if (!customer) {
-      throw new NotFoundException(`Customer ${dto.kdAccountId} not found`);
-    }
-    if (!customer.isActive) {
-      throw new BadRequestException(
-        `Customer "${customer.businessName}" is deactivated`,
+      throw new NotFoundException(
+        `KD account '${dto.kdAccountId}' not found`,
       );
     }
 
-    // Validate all referenced products exist — same dedup + single-query
-    // pattern as PurchaseOrderService.create() for O(1) DB round trips
-    // regardless of item count.
+    if (!customer.isActive) {
+      throw new BadRequestException(
+        `KD account '${customer.businessName}' is deactivated and cannot receive secondary sales`,
+      );
+    }
+
+    // Validate products — single round-trip with deduplicated IDs
     const productIds = [...new Set(dto.items.map((i) => i.productId))];
-    const products = await this.prisma.product.findMany({
-      where:  { id: { in: productIds } },
+
+    const foundProducts = await this.prisma.product.findMany({
+      where: { id: { in: productIds } },
       select: { id: true },
     });
-    if (products.length !== productIds.length) {
-      const found   = new Set(products.map((p) => p.id));
-      const missing = productIds.filter((id) => !found.has(id));
-      throw new BadRequestException(`Products not found: ${missing.join(', ')}`);
+
+    const foundIds = new Set(foundProducts.map((p) => p.id));
+    const missingIds = productIds.filter((id) => !foundIds.has(id));
+
+    if (missingIds.length > 0) {
+      throw new BadRequestException(
+        `Unknown product ID(s): ${missingIds.join(', ')}`,
+      );
     }
 
-    // Resolve GPS coordinates to a human-readable address via Google Maps.
-    // Falls back to coordinate string if geocoding fails — never block a sale.
-    let resolvedAddress: string | null = null;
-    try {
-      const geo = await this.maps.reverseGeocode(dto.latitude, dto.longitude);
-      resolvedAddress = geo?.address ?? `${dto.latitude}, ${dto.longitude}`;
-    } catch {
-      resolvedAddress = `${dto.latitude}, ${dto.longitude}`;
-      this.logger.warn(`Geocoding failed for secondary sale — storing raw coordinates`);
-    }
-
-    const sale = await this.prisma.secondarySale.create({
+    return this.prisma.secondarySale.create({
       data: {
         userId:      requester.sub,
         kdAccountId: dto.kdAccountId,
         latitude:    dto.latitude,
         longitude:   dto.longitude,
-        address:     resolvedAddress,
         deviceTime:  new Date(dto.deviceTime),
         note:        dto.note ?? null,
         items: {
           create: dto.items.map((item) => ({
             productId:       item.productId,
             buyerType:       item.buyerType,
-            quantityCartons: item.quantityCartons ?? 0,
-            quantityRows:    item.quantityRows    ?? 0,
-            quantityPieces:  item.quantityPieces  ?? 0,
+            quantityCartons: item.quantityCartons  ?? 0,
+            quantityRows:    item.quantityRows     ?? 0,
+            quantityPieces:  item.quantityPieces   ?? 0,
           })),
         },
       },
-      select: SALE_SELECT,
+      include: SALE_INCLUDE,
     });
-
-    this.logger.log(
-      `Secondary sale logged at customer ${dto.kdAccountId} by ${requester.sub}`,
-    );
-    return sale;
   }
 
-  // ── Read ───────────────────────────────────────────────────────────────────
+  // ─── findAll (own / all depending on tier) ────────────────────────────────
 
-  async findAll(query: SecondarySaleQueryDto, requester: JwtPayload) {
-    const isAdmin = ADMIN_TIERS.includes(requester.tier as string);
-    const dateFilter = this.buildDateFilter(query.from, query.to);
+  /**
+   * Returns up to 200 secondary sales.
+   *
+   * Scoping:
+   *  - TIER1–TIER4  → own records only; userId filter is ignored
+   *  - Oversight tiers (TIER5_SALES_HEAD, TIER5_SALES_SUPPORT, etc.) → all records
+   *
+   * Filters available to oversight roles: userId, kdAccountId, buyerType, from/to (deviceTime).
+   */
+  async findAll(
+    query: SecondarySaleQueryDto,
+    requester: JwtPayload,
+  ): Promise<any[]> {
+    const isFieldAgent = FIELD_TIERS.includes(requester.tier as any);
+    const resolvedUserId = isFieldAgent
+      ? requester.sub
+      : (query.userId ?? undefined);
+
+    const where: Prisma.SecondarySaleWhereInput = {
+      ...(resolvedUserId  ? { userId:      resolvedUserId  } : {}),
+      ...(query.kdAccountId ? { kdAccountId: query.kdAccountId } : {}),
+      ...(query.buyerType
+        ? { items: { some: { buyerType: query.buyerType } } }
+        : {}),
+      ...(query.from || query.to
+        ? {
+            deviceTime: {
+              ...(query.from ? { gte: new Date(query.from) } : {}),
+              ...(query.to   ? { lte: new Date(query.to)   } : {}),
+            },
+          }
+        : {}),
+    };
 
     return this.prisma.secondarySale.findMany({
-      where: {
-        ...(isAdmin ? {} : { userId: requester.sub }),
-        ...(query.kdAccountId ? { kdAccountId: query.kdAccountId } : {}),
-        ...(dateFilter ? { deviceTime: dateFilter } : {}),
-        ...(query.buyerType
-          ? { items: { some: { buyerType: query.buyerType } } }
-          : {}),
-      },
-      select:  SALE_SELECT,
+      where,
       orderBy: { deviceTime: 'desc' },
       take:    200,
+      include: SALE_INCLUDE,
     });
   }
 
-  async findById(id: string, requester: JwtPayload) {
-    const sale = await this.prisma.secondarySale.findUnique({
-      where:  { id },
-      select: SALE_SELECT,
-    });
-    if (!sale) throw new NotFoundException(`Secondary sale ${id} not found`);
+  // ─── findById ─────────────────────────────────────────────────────────────
 
-    if (
-      !ADMIN_TIERS.includes(requester.tier as string) &&
-      sale.userId !== requester.sub
-    ) {
+  /**
+   * Returns a single secondary sale by ID.
+   * Field agents can only fetch their own; oversight roles can fetch any.
+   */
+  async findById(saleId: string, requester: JwtPayload): Promise<any> {
+    const sale = await this.prisma.secondarySale.findUnique({
+      where: { id: saleId },
+      include: SALE_INCLUDE,
+    });
+
+    if (!sale) {
+      throw new NotFoundException(`Secondary sale '${saleId}' not found`);
+    }
+
+    const isFieldAgent = FIELD_TIERS.includes(requester.tier as any);
+    if (isFieldAgent && sale.userId !== requester.sub) {
       throw new ForbiddenException('You can only view your own secondary sales');
     }
 
     return sale;
   }
 
-  // ── Private helpers ────────────────────────────────────────────────────────
+  // ─── TIER5_SALES_SUPPORT: All Secondary Sales (platform-wide, paginated) ──
 
-  private buildDateFilter(
-    from?: string,
-    to?: string,
-  ): { gte?: Date; lte?: Date } | null {
-    if (!from && !to) return null;
-    return {
-      ...(from ? { gte: new Date(from) } : {}),
-      ...(to   ? { lte: new Date(to) }   : {}),
+  /**
+   * GET /secondary-sales/support/all
+   *
+   * Paginated platform-wide visibility for TIER5_SALES_SUPPORT.
+   * Filters: team, tier, region, userId, from, to (serverTime).
+   */
+  async findAllForSupport(
+    query: {
+      team?: string; tier?: string; region?: string; userId?: string;
+      from?: string; to?: string; page?: number; limit?: number;
+    },
+    _requester: JwtPayload,
+  ): Promise<PaginatedResult<any>> {
+    const page  = Math.max(1, Number(query.page)  || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+    const skip  = (page - 1) * limit;
+
+    const where: Prisma.SecondarySaleWhereInput = {
+      ...(query.userId ? { userId: query.userId } : {}),
+      ...(query.from || query.to
+        ? {
+            serverTime: {
+              ...(query.from ? { gte: new Date(query.from) } : {}),
+              ...(query.to   ? { lte: new Date(query.to)   } : {}),
+            },
+          }
+        : {}),
+      user: {
+        ...(query.team   ? { team:   query.team   as any } : {}),
+        ...(query.tier   ? { tier:   query.tier   as any } : {}),
+        ...(query.region ? { region: query.region as any } : {}),
+      },
     };
+
+    const [data, total] = await Promise.all([
+      this.prisma.secondarySale.findMany({
+        where,
+        orderBy: { serverTime: 'desc' },
+        skip,
+        take: limit,
+        include: SALE_INCLUDE,
+      }),
+      this.prisma.secondarySale.count({ where }),
+    ]);
+
+    return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+  }
+
+  // ─── TIER5_SALES_SUPPORT: Sales by User (paginated) ───────────────────────
+
+  /**
+   * GET /secondary-sales/support/user/:userId
+   *
+   * Full secondary sales history for any specific user.
+   * TIER5_SALES_SUPPORT only.
+   */
+  async findByUserForSupport(
+    targetUserId: string,
+    query: { from?: string; to?: string; page?: number; limit?: number },
+    _requester: JwtPayload,
+  ): Promise<PaginatedResult<any>> {
+    const page  = Math.max(1, Number(query.page)  || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
+    const skip  = (page - 1) * limit;
+
+    const where: Prisma.SecondarySaleWhereInput = {
+      userId: targetUserId,
+      ...(query.from || query.to
+        ? {
+            serverTime: {
+              ...(query.from ? { gte: new Date(query.from) } : {}),
+              ...(query.to   ? { lte: new Date(query.to)   } : {}),
+            },
+          }
+        : {}),
+    };
+
+    const [data, total] = await Promise.all([
+      this.prisma.secondarySale.findMany({
+        where,
+        orderBy: { serverTime: 'desc' },
+        skip,
+        take: limit,
+        include: SALE_INCLUDE,
+      }),
+      this.prisma.secondarySale.count({ where }),
+    ]);
+
+    return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 }
