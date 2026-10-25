@@ -1,4 +1,4 @@
-// src/modules/seconday-sales/seconday-sales.service.ts
+
 import {
   BadRequestException,
   ForbiddenException,
@@ -6,13 +6,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-
 import { PrismaService } from '@common/prisma/prisma.service';
 import { GoogleMapsService } from '@common/google/google-map.service';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import type { CreateSecondarySaleDto, SecondarySaleQueryDto } from './dto/seconday-sale.dto';
 
-// ─── Exported pagination type (used by controller return types) ───────────────
+// Exported pagination type (used by controller return types)
 
 export interface PaginatedResult<T> {
   data: T[];
@@ -129,10 +128,12 @@ export class SecondaySalesService {
    * Returns up to 200 secondary sales.
    *
    * Scoping:
-   *  - TIER1–TIER4  → own records only; userId filter is ignored
+   *  - TIER1–TIER4  → own records only; all user/team/tier/region filters are ignored
    *  - Oversight tiers (TIER5_SALES_HEAD, TIER5_SALES_SUPPORT, etc.) → all records
    *
-   * Filters available to oversight roles: userId, kdAccountId, buyerType, from/to (deviceTime).
+   * Filters available to oversight roles:
+   *   userId, kdAccountId, buyerType, from/to (deviceTime),
+   *   team, tier, region (filtered via the related user record).
    */
   async findAll(
     query: SecondarySaleQueryDto,
@@ -143,8 +144,20 @@ export class SecondaySalesService {
       ? requester.sub
       : (query.userId ?? undefined);
 
+    // Build user-relation filter (oversight only — field agents are already
+    // scoped by userId so these filters are irrelevant for them).
+    const userFilter = !isFieldAgent && (query.team || query.tier || query.region)
+      ? {
+          user: {
+            ...(query.team   ? { team:   query.team   as any } : {}),
+            ...(query.tier   ? { tier:   query.tier   as any } : {}),
+            ...(query.region ? { region: query.region as any } : {}),
+          },
+        }
+      : {};
+
     const where: Prisma.SecondarySaleWhereInput = {
-      ...(resolvedUserId  ? { userId:      resolvedUserId  } : {}),
+      ...(resolvedUserId    ? { userId:      resolvedUserId    } : {}),
       ...(query.kdAccountId ? { kdAccountId: query.kdAccountId } : {}),
       ...(query.buyerType
         ? { items: { some: { buyerType: query.buyerType } } }
@@ -157,6 +170,7 @@ export class SecondaySalesService {
             },
           }
         : {}),
+      ...userFilter,
     };
 
     return this.prisma.secondarySale.findMany({

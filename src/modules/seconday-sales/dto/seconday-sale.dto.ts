@@ -107,4 +107,19 @@ export class SecondarySaleQueryDto {
     @IsOptional()
     @IsDateString()
     to?: string;
+
+    @ApiPropertyOptional({ description: 'Filter by team name' })
+    @IsOptional()
+    @IsString()
+    team?: string;
+
+    @ApiPropertyOptional({ description: 'Filter by user tier' })
+    @IsOptional()
+    @IsString()
+    tier?: string;
+
+    @ApiPropertyOptional({ description: 'Filter by region' })
+    @IsOptional()
+    @IsString()
+    region?: string;
 }
