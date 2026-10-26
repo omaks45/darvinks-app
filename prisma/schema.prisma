@@ -357,12 +357,16 @@ model AttendanceEvent {
   serverTime  DateTime       @default(now())
   kdAccountId String?
   kdAccount   Customer?      @relation(fields: [kdAccountId], references: [id])
+  parentEventId String?
+  parent        AttendanceEvent?  @relation("VisitPair", fields: [parentEventId], references: [id])
+  children      AttendanceEvent[] @relation("VisitPair")
   note        String?
 
   @@index([userId, serverTime])
   @@index([userId, deviceTime])
   @@index([type])
   @@index([flag])
+  @@index([parentEventId])
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

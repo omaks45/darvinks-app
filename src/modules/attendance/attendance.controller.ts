@@ -1,4 +1,4 @@
-// src/modules/attendance/attendance.controller.ts
+
 import {
   Body,
   Controller,
@@ -102,7 +102,8 @@ export class AttendanceController {
     summary: 'Log KD visit arrival (Tier 1–4)',
     description:
       'Records that the field agent has arrived at a KD location. ' +
-      'Call POST /attendance/kd-visit/end when the agent leaves. ' +
+      'The response includes the new event ID — the mobile client must store this ' +
+      'ID and send it as `parentEventId` when calling POST /attendance/kd-visit/end. ' +
       'Both endpoints require a selfie photo and GPS coordinates.',
   })
   @ApiConsumes('multipart/form-data')
@@ -112,7 +113,29 @@ export class AttendanceController {
       fileFilter: attendancePhotoFilter,
     }),
   )
-  @ApiResponse({ status: 201, description: 'KD visit arrival recorded' })
+  @ApiResponse({
+    status: 201,
+    description: 'KD visit arrival recorded. Store the returned `id` — send it as `parentEventId` when ending this visit.',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: 'visit-start-uuid',
+          type: 'KD_VISIT',
+          flag: 'ON_TIME',
+          kdAccountId: 'customer-uuid',
+          latitude: 6.5244,
+          longitude: 3.3792,
+          address: '45 Allen Avenue, Ikeja, Lagos',
+          photoUrl: 'https://res.cloudinary.com/...',
+          deviceTime: '2026-08-02T09:10:00.000Z',
+          serverTime: '2026-08-02T09:10:02.000Z',
+          note: null,
+        },
+        timestamp: '2026-08-02T09:10:02.000Z',
+      },
+    },
+  })
   @ApiResponse({ status: 400, description: 'Open visit already exists for this KD today' })
   @ApiResponse({ status: 403, description: 'Only field agents (Tier 1–4) can log KD visits' })
   recordKdVisit(
@@ -131,10 +154,11 @@ export class AttendanceController {
     summary: 'Log KD visit departure (Tier 1–4)',
     description:
       'Records that the field agent has left the KD location. ' +
-      'Must be called after POST /attendance/kd-visit for the same KD and same day. ' +
-      'The server validates that an open arrival record exists for this KD today before creating the departure record. ' +
-      'The frontend pairs the arrival (KD_VISIT) and departure (KD_VISIT_END) records ' +
-      'by matching kdAccountId + date to calculate visit duration.',
+      'Send the `parentEventId` field in the request body — it must be the `id` ' +
+      'returned when the visit was opened via POST /attendance/kd-visit. ' +
+      'The server uses this to link the departure to the exact arrival record, ' +
+      'which allows correct pairing even when the same customer is visited twice in one day. ' +
+      'The server validates that an open arrival record exists for this KD today before creating the departure.',
   })
   @ApiConsumes('multipart/form-data')
   @UseInterceptors(
@@ -143,7 +167,30 @@ export class AttendanceController {
       fileFilter: attendancePhotoFilter,
     }),
   )
-  @ApiResponse({ status: 201, description: 'KD visit departure recorded' })
+  @ApiResponse({
+    status: 201,
+    description: 'KD visit departure recorded. The `parentEventId` field on the response links this departure back to the arrival.',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          id: 'visit-end-uuid',
+          type: 'KD_VISIT_END',
+          flag: 'ON_TIME',
+          kdAccountId: 'customer-uuid',
+          parentEventId: 'visit-start-uuid',
+          latitude: 6.5244,
+          longitude: 3.3792,
+          address: '45 Allen Avenue, Ikeja, Lagos',
+          photoUrl: 'https://res.cloudinary.com/...',
+          deviceTime: '2026-08-02T10:30:00.000Z',
+          serverTime: '2026-08-02T10:30:02.000Z',
+          note: null,
+        },
+        timestamp: '2026-08-02T10:30:02.000Z',
+      },
+    },
+  })
   @ApiResponse({ status: 400, description: 'No open KD visit found for this KD today, or already ended' })
   @ApiResponse({ status: 403, description: 'Only field agents (Tier 1–4) can log KD visits' })
   endKdVisit(
@@ -223,13 +270,6 @@ export class AttendanceController {
 
   // ─── TIER5_FIELD_SUPPORT: All Attendance (platform-wide) ─────────────────
 
-  /**
-   * GET /attendance/support/all
-   *
-   * Platform-wide attendance records (CLOCK_IN, CLOCK_OUT, KD_VISIT, KD_VISIT_END).
-   * Filterable by team, tier, region, userId, type, from, to.
-   * TIER5_FIELD_SUPPORT only.
-   */
   @Get('support/all')
   @Roles('TIER5_FIELD_SUPPORT')
   @UseGuards(RolesGuard)
@@ -258,18 +298,13 @@ export class AttendanceController {
         data: {
           data: [
             {
-              id: 'event-id',
-              type: 'CLOCK_IN',
-              flag: 'ON_TIME',
+              id: 'event-id', type: 'CLOCK_IN', flag: 'ON_TIME',
               photoUrl: 'https://res.cloudinary.com/...',
-              latitude: 6.5244,
-              longitude: 3.3792,
+              latitude: 6.5244, longitude: 3.3792,
               address: '12 Kolade Street, Ilupeju, Lagos',
               deviceTime: '2026-08-02T08:45:00.000Z',
               serverTime: '2026-08-02T08:45:02.000Z',
-              note: null,
-              kdAccountId: null,
-              kdAccount: null,
+              note: null, kdAccountId: null, kdAccount: null,
               user: { id: 'user-id', fullName: 'Emeka Obi', employeeRef: 'Dar-00000003', role: 'MERCHANDISER', tier: 'TIER2', team: 'RADIANT', region: 'SOUTH_WEST' },
             },
           ],
@@ -291,49 +326,83 @@ export class AttendanceController {
     return this.attendanceService.findAllForSupport(query, user);
   }
 
-  // ─── TIER5_FIELD_SUPPORT: Attendance by User ──────────────────────────────
+  // ─── TIER5_FIELD_SUPPORT: Attendance by User (daily scored format) ────────
 
-  /**
-   * GET /attendance/support/user/:userId
-   *
-   * Full attendance history for any specific user.
-   * TIER5_FIELD_SUPPORT only.
-   */
   @Get('support/user/:userId')
   @Roles('TIER5_FIELD_SUPPORT')
   @UseGuards(RolesGuard)
   @ApiOperation({
-    summary: "Get a specific user's full attendance history (Field Support only)",
+    summary: "Get a user's attendance history — daily scored format (Field Support only)",
     description:
-      'Returns all attendance events for the given user across all time. ' +
-      'Optionally filter by event type and date range. ' +
+      'Returns the attendance history for the given user grouped by calendar day. ' +
+      'Each day shows a `clockIn` score (1 = ON_TIME, 0 = LATE/OUTSIDE_WINDOW/absent) ' +
+      'and a `clockOut` score on the same basis. ' +
+      '`totalPoints` is the sum — max 2 per day. ' +
+      'This scoring format is used by the Field Support team for payment calculation. ' +
       'Restricted to TIER5_FIELD_SUPPORT.',
   })
   @ApiParam({ name: 'userId', description: 'UUID of the target user' })
-  @ApiQuery({ name: 'type',  required: false, enum: ['CLOCK_IN', 'CLOCK_OUT', 'KD_VISIT', 'KD_VISIT_END'] })
   @ApiQuery({ name: 'from',  required: false, description: 'Start date inclusive — ISO 8601' })
   @ApiQuery({ name: 'to',    required: false, description: 'End date inclusive — ISO 8601' })
-  @ApiQuery({ name: 'page',  required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiResponse({ status: 200, description: "Paginated attendance history for the target user" })
+  @ApiQuery({ name: 'page',  required: false, type: Number, description: 'Page number — paginates by day, not by raw event (default: 1)' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Days per page (default: 31, max: 100)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Daily scored attendance history for payment calculation',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          data: [
+            {
+              date:         '2026-08-02',
+              clockIn:      1,
+              clockInFlag:  'ON_TIME',
+              clockInTime:  '2026-08-02T08:45:02.000Z',
+              clockOut:     1,
+              clockOutFlag: 'ON_TIME',
+              clockOutTime: '2026-08-02T17:00:02.000Z',
+              totalPoints:  2,
+            },
+            {
+              date:         '2026-08-01',
+              clockIn:      1,
+              clockInFlag:  'ON_TIME',
+              clockInTime:  '2026-08-01T08:55:01.000Z',
+              clockOut:     0,
+              clockOutFlag: 'LATE',
+              clockOutTime: '2026-08-01T18:10:00.000Z',
+              totalPoints:  1,
+            },
+            {
+              date:         '2026-07-31',
+              clockIn:      0,
+              clockInFlag:  'OUTSIDE_WINDOW',
+              clockInTime:  '2026-07-31T11:00:00.000Z',
+              clockOut:     null,
+              clockOutFlag: null,
+              clockOutTime: null,
+              totalPoints:  0,
+            },
+          ],
+          meta: { total: 22, page: 1, limit: 31, totalPages: 1 },
+        },
+        timestamp: '2026-08-02T12:00:00.000Z',
+      },
+    },
+  })
   @ApiResponse({ status: 403, description: 'Forbidden — TIER5_FIELD_SUPPORT only' })
   @ApiResponse({ status: 404, description: 'User not found' })
   getSupportAttendanceByUser(
     @Param('userId') userId: string,
     @CurrentUser() user: JwtPayload,
-    @Query() query: { type?: string; from?: string; to?: string; page?: number; limit?: number },
+    @Query() query: { from?: string; to?: string; page?: number; limit?: number },
   ) {
     return this.attendanceService.findAttendanceByUserForSupport(userId, query, user);
   }
 
   // ─── TIER5_FIELD_SUPPORT: All KD Visits (with timeSpent) ─────────────────
 
-  /**
-   * GET /attendance/support/kd-visits
-   *
-   * All KD visit arrival events paired with their departure, plus computed
-   * timeSpentSeconds and timeSpentMinutes. TIER5_FIELD_SUPPORT only.
-   */
   @Get('support/kd-visits')
   @Roles('TIER5_FIELD_SUPPORT')
   @UseGuards(RolesGuard)
@@ -362,12 +431,9 @@ export class AttendanceController {
         data: {
           data: [
             {
-              id: 'visit-start-id',
-              type: 'KD_VISIT',
-              flag: 'ON_TIME',
+              id: 'visit-start-id', type: 'KD_VISIT', flag: 'ON_TIME',
               photoUrl: 'https://res.cloudinary.com/...',
-              latitude: 6.5244,
-              longitude: 3.3792,
+              latitude: 6.5244, longitude: 3.3792,
               address: '45 Allen Avenue, Ikeja, Lagos',
               deviceTime: '2026-08-02T09:10:00.000Z',
               serverTime: '2026-08-02T09:10:02.000Z',
@@ -376,11 +442,9 @@ export class AttendanceController {
               kdAccount: { id: 'customer-uuid', businessName: 'Ore Ofe Distributors' },
               user: { id: 'user-id', fullName: 'Emeka Obi', employeeRef: 'Dar-00000003', role: 'MERCHANDISER', tier: 'TIER2', team: 'RADIANT', region: 'SOUTH_WEST' },
               visitEnd: {
-                id: 'visit-end-id',
-                type: 'KD_VISIT_END',
+                id: 'visit-end-id', type: 'KD_VISIT_END',
                 photoUrl: 'https://res.cloudinary.com/...',
-                latitude: 6.5244,
-                longitude: 3.3792,
+                latitude: 6.5244, longitude: 3.3792,
                 address: '45 Allen Avenue, Ikeja, Lagos',
                 deviceTime: '2026-08-02T10:30:00.000Z',
                 serverTime: '2026-08-02T10:30:02.000Z',
@@ -406,52 +470,47 @@ export class AttendanceController {
     return this.attendanceService.findAllKdVisitsForSupport(query);
   }
 
-  // ─── TIER5_FIELD_SUPPORT: Single KD Visit by ID ───────────────────────────
+  // ─── TIER5_FIELD_SUPPORT: Single KD Visit detail with activities ──────────
 
-  /**
-   * GET /attendance/support/kd-visits/:eventId
-   *
-   * Retrieves a single KD visit arrival event by its UUID, paired with its
-   * departure and computed timeSpentSeconds / timeSpentMinutes.
-   * TIER5_FIELD_SUPPORT only.
-   */
   @Get('support/kd-visits/:eventId')
   @Roles('TIER5_FIELD_SUPPORT')
   @UseGuards(RolesGuard)
   @ApiOperation({
-    summary: 'Get a single KD visit with time spent (Field Support only)',
+    summary: 'Single KD visit with activities performed during the visit (Field Support only)',
     description:
-      'Retrieves one KD_VISIT event by its ID, paired with the KD_VISIT_END departure event. ' +
-      'Returns timeSpentSeconds and timeSpentMinutes — null if visit not yet ended. ' +
+      'Returns a KD_VISIT event paired with its KD_VISIT_END departure and all activities ' +
+      'the agent performed at that customer during the visit window (arrival → departure). ' +
+      '\n\nActivities included:\n' +
+      '- **purchaseOrders** — POs raised for this customer by this agent\n' +
+      '- **collections** — cash/transfer payments collected from this customer\n' +
+      '- **secondarySales** — secondary sales logged at this KD account\n' +
+      '- **stockCollections** — stock pick-ups from this KD\n' +
+      '- **invoices** — secondary sale invoices raised against this customer\n\n' +
+      'If the visit has not ended yet, activities are fetched up to the current time. ' +
       'Restricted to TIER5_FIELD_SUPPORT.',
   })
   @ApiParam({ name: 'eventId', description: 'UUID of the KD_VISIT attendance event' })
   @ApiResponse({
     status: 200,
-    description: 'KD visit event with departure pair and computed time spent',
+    description: 'KD visit detail with departure pair, time spent, and all activities',
     schema: {
       example: {
         success: true,
         data: {
-          id: 'visit-start-id',
-          type: 'KD_VISIT',
-          flag: 'ON_TIME',
+          id: 'visit-start-id', type: 'KD_VISIT', flag: 'ON_TIME',
           photoUrl: 'https://res.cloudinary.com/...',
-          latitude: 6.5244,
-          longitude: 3.3792,
+          latitude: 6.5244, longitude: 3.3792,
           address: '45 Allen Avenue, Ikeja, Lagos',
           deviceTime: '2026-08-02T09:10:00.000Z',
           serverTime: '2026-08-02T09:10:02.000Z',
           note: null,
           kdAccountId: 'customer-uuid',
-          kdAccount: { id: 'customer-uuid', businessName: 'Ore Ofe Distributors' },
+          kdAccount: { id: 'customer-uuid', businessName: 'Ore Ofe Distributors', customerType: 'PRIMARY' },
           user: { id: 'user-id', fullName: 'Emeka Obi', employeeRef: 'Dar-00000003', role: 'MERCHANDISER', tier: 'TIER2', team: 'RADIANT', region: 'SOUTH_WEST' },
           visitEnd: {
-            id: 'visit-end-id',
-            type: 'KD_VISIT_END',
+            id: 'visit-end-id', type: 'KD_VISIT_END',
             photoUrl: 'https://res.cloudinary.com/...',
-            latitude: 6.5244,
-            longitude: 3.3792,
+            latitude: 6.5244, longitude: 3.3792,
             address: '45 Allen Avenue, Ikeja, Lagos',
             deviceTime: '2026-08-02T10:30:00.000Z',
             serverTime: '2026-08-02T10:30:02.000Z',
@@ -459,6 +518,39 @@ export class AttendanceController {
           },
           timeSpentSeconds: 4800,
           timeSpentMinutes: 80,
+          activities: {
+            summary: {
+              hasPurchaseOrders: true,
+              hasCollections: false,
+              hasSecondarySales: true,
+              hasStockCollections: false,
+              hasInvoices: false,
+              totalActivities: 2,
+            },
+            purchaseOrders: [
+              {
+                id: 'po-id', orderRef: 'PO-000042', status: 'PENDING',
+                totalKobo: 250000,
+                createdAt: '2026-08-02T09:25:00.000Z',
+                items: [
+                  { product: { id: 'prod-id', name: 'Darvinks Cream 100g', category: 'CREAM' }, quantityCartons: 2, lineTotalKobo: 120000 },
+                ],
+              },
+            ],
+            collections: [],
+            secondarySales: [
+              {
+                id: 'sale-id',
+                deviceTime: '2026-08-02T09:40:00.000Z',
+                note: null,
+                items: [
+                  { buyerType: 'RETAILER', quantityCartons: 1, quantityRows: 0, quantityPieces: 0, product: { id: 'prod-id', name: 'Darvinks Cream 100g', category: 'CREAM' } },
+                ],
+              },
+            ],
+            stockCollections: [],
+            invoices: [],
+          },
         },
         timestamp: '2026-08-02T12:00:00.000Z',
       },
@@ -472,18 +564,6 @@ export class AttendanceController {
 
   // ─── List All Attendance Events ───────────────────────────────────────────
 
-  /**
-   * GET /attendance
-   *
-   * Lists clock-in / clock-out events with optional filters.
-   *
-   * Scoping:
-   *  - Tier 1–4 (field agents)        → own events only; ?userId is ignored
-   *  - Oversight tiers (FIELD_SUPPORT  → all events; optionally filter by ?userId
-   *    and above)
-   *
-   * Defaults to CLOCK_IN + CLOCK_OUT unless ?type= is provided.
-   */
   @Get()
   @ApiOperation({
     summary: 'List attendance events (clock-in / clock-out)',
@@ -508,18 +588,13 @@ export class AttendanceController {
         data: {
           data: [
             {
-              id: 'event-id',
-              type: 'CLOCK_IN',
-              flag: 'ON_TIME',
+              id: 'event-id', type: 'CLOCK_IN', flag: 'ON_TIME',
               photoUrl: 'https://res.cloudinary.com/...',
-              latitude: 6.5244,
-              longitude: 3.3792,
+              latitude: 6.5244, longitude: 3.3792,
               address: '12 Kolade Street, Ilupeju, Lagos',
               deviceTime: '2026-08-02T08:45:00.000Z',
               serverTime: '2026-08-02T08:45:02.000Z',
-              note: null,
-              kdAccountId: null,
-              kdAccount: null,
+              note: null, kdAccountId: null, kdAccount: null,
               user: { id: 'user-id', fullName: 'Emeka Obi', employeeRef: 'Dar-00000003', role: 'MERCHANDISER', team: 'RADIANT', region: 'SOUTH_WEST' },
             },
           ],
@@ -538,13 +613,6 @@ export class AttendanceController {
 
   // ─── KD Visit Pairs ───────────────────────────────────────────────────────
 
-  /**
-   * GET /attendance/kd-visits
-   *
-   * Returns KD_VISIT events each paired with their matching KD_VISIT_END.
-   * visitEnd is null when the agent has not yet ended the visit.
-   * Scoping: field agents see own, oversight roles see all.
-   */
   @Get('kd-visits')
   @ApiOperation({
     summary: 'List KD visit pairs (arrival + departure)',
@@ -567,12 +635,9 @@ export class AttendanceController {
         data: {
           data: [
             {
-              id: 'visit-start-id',
-              type: 'KD_VISIT',
-              flag: 'ON_TIME',
+              id: 'visit-start-id', type: 'KD_VISIT', flag: 'ON_TIME',
               photoUrl: 'https://res.cloudinary.com/...',
-              latitude: 6.5244,
-              longitude: 3.3792,
+              latitude: 6.5244, longitude: 3.3792,
               address: '45 Allen Avenue, Ikeja, Lagos',
               deviceTime: '2026-08-02T09:10:00.000Z',
               serverTime: '2026-08-02T09:10:02.000Z',
@@ -581,12 +646,9 @@ export class AttendanceController {
               kdAccount: { id: 'customer-uuid', businessName: 'Ore Ofe Distributors' },
               user: { id: 'user-id', fullName: 'Emeka Obi', employeeRef: 'Dar-00000003', role: 'MERCHANDISER', team: 'RADIANT', region: 'SOUTH_WEST' },
               visitEnd: {
-                id: 'visit-end-id',
-                type: 'KD_VISIT_END',
-                flag: 'ON_TIME',
+                id: 'visit-end-id', type: 'KD_VISIT_END', flag: 'ON_TIME',
                 photoUrl: 'https://res.cloudinary.com/...',
-                latitude: 6.5244,
-                longitude: 3.3792,
+                latitude: 6.5244, longitude: 3.3792,
                 address: '45 Allen Avenue, Ikeja, Lagos',
                 deviceTime: '2026-08-02T10:30:00.000Z',
                 serverTime: '2026-08-02T10:30:02.000Z',
@@ -607,32 +669,42 @@ export class AttendanceController {
     return this.attendanceService.findKdVisits(query, user);
   }
 
-  // ─── Single User History ──────────────────────────────────────────────────
+  // ─── Single User History (scored daily format) ────────────────────────────
 
-  /**
-   * GET /attendance/user/:userId
-   *
-   * Full attendance history for a specific user (all event types).
-   *
-   * - Field agents: only their own userId is accepted (403 if different).
-   * - Oversight roles: any userId.
-   */
   @Get('user/:userId')
   @ApiOperation({
-    summary: "Get a specific user's attendance history",
+    summary: "Get a specific user's attendance history — daily scored format",
     description:
+      'Returns the attendance history for the given user grouped by calendar day. ' +
+      'Each day shows `clockIn` (1 = ON_TIME, 0 = LATE/absent) and `clockOut` scores. ' +
+      '`totalPoints` is the sum per day (max 2). ' +
       'Field agents may only request their own history — passing another userId returns 403. ' +
-      'Oversight roles (FIELD_SUPPORT and above) can view any user. ' +
-      'Supports the same filters as GET /attendance (type, from, to, page, limit).',
+      'Oversight roles (FIELD_SUPPORT and above) can view any user.',
   })
   @ApiParam({ name: 'userId', description: 'UUID of the target user' })
-  @ApiQuery({ name: 'type',  required: false, enum: ['CLOCK_IN', 'CLOCK_OUT', 'KD_VISIT', 'KD_VISIT_END'] })
   @ApiQuery({ name: 'from',  required: false, description: 'Start date inclusive — ISO 8601' })
   @ApiQuery({ name: 'to',    required: false, description: 'End date inclusive — ISO 8601' })
-  @ApiQuery({ name: 'page',  required: false, type: Number })
-  @ApiQuery({ name: 'limit', required: false, type: Number })
-  @ApiResponse({ status: 200, description: "Paginated attendance history for the target user" })
-  @ApiResponse({ status: 403, description: 'Field agents cannot view another user\'s attendance' })
+  @ApiQuery({ name: 'page',  required: false, type: Number, description: 'Page number — paginates by day (default: 1)' })
+  @ApiQuery({ name: 'limit', required: false, type: Number, description: 'Days per page (default: 31, max: 100)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Daily scored attendance history',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          data: [
+            { date: '2026-08-02', clockIn: 1, clockInFlag: 'ON_TIME', clockInTime: '2026-08-02T08:45:02.000Z', clockOut: 1, clockOutFlag: 'ON_TIME', clockOutTime: '2026-08-02T17:00:02.000Z', totalPoints: 2 },
+            { date: '2026-08-01', clockIn: 1, clockInFlag: 'ON_TIME', clockInTime: '2026-08-01T08:55:01.000Z', clockOut: 0, clockOutFlag: 'LATE', clockOutTime: '2026-08-01T18:10:00.000Z', totalPoints: 1 },
+            { date: '2026-07-31', clockIn: 0, clockInFlag: 'OUTSIDE_WINDOW', clockInTime: '2026-07-31T11:00:00.000Z', clockOut: null, clockOutFlag: null, clockOutTime: null, totalPoints: 0 },
+          ],
+          meta: { total: 22, page: 1, limit: 31, totalPages: 1 },
+        },
+        timestamp: '2026-08-02T12:00:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 403, description: "Field agents cannot view another user's attendance" })
   findByUser(
     @Param('userId') userId: string,
     @CurrentUser() user: JwtPayload,

@@ -58,6 +58,17 @@ export class KdVisitDto extends ClockEventDto {
   @IsUUID()
   @IsNotEmpty()
   kdAccountId: string;
+
+  @ApiPropertyOptional({
+    description:
+      'UUID of the opening KD_VISIT event. ' +
+      'Required when submitting a KD_VISIT_END — the mobile client knows ' +
+      'this ID from the response it received when the visit was opened.',
+    example: 'a1b2c3d4-e5f6-7a8b-9c0d-1e2f3a4b5c6d',
+  })
+  @IsOptional()
+  @IsUUID()
+  parentEventId?: string;
 }
 
 // ─── Attendance Query ──────────────────────────────────────────────────────────

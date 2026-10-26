@@ -35,6 +35,29 @@ export interface PaginatedResult<T> {
 
 const FIELD_TIERS = ['TIER1', 'TIER2', 'TIER3', 'TIER4'] as const;
 
+// ─── Scored attendance day type ───────────────────────────────────────────────
+
+/**
+ * One calendar day's attendance score for payment calculation.
+ *
+ * clockIn  = 1 if the agent clocked in ON_TIME, else 0
+ * clockOut = 1 if the agent clocked out ON_TIME, else 0
+ * totalPoints = sum (max 2 per day)
+ *
+ * LATE and OUTSIDE_WINDOW events are excluded from the score per
+ * product-owner spec — only ON_TIME events count for payment.
+ */
+export interface DailyAttendanceScore {
+  date:            string;       // YYYY-MM-DD (UTC)
+  clockIn:         0 | 1;
+  clockInFlag:     AttendanceFlag | null;
+  clockInTime:     string | null; // ISO serverTime
+  clockOut:        0 | 1;
+  clockOutFlag:    AttendanceFlag | null;
+  clockOutTime:    string | null;
+  totalPoints:     number;
+}
+
 @Injectable()
 export class AttendanceService {
   private readonly logger = new Logger(AttendanceService.name);
@@ -168,14 +191,13 @@ export class AttendanceService {
     return event;
   }
 
-  // ─── KD Visit (Tier 1 only) ───────────────────────────────────────────────
+  // ─── KD Visit Start ───────────────────────────────────────────────────────
 
   async recordKdVisit(
     requester: JwtPayload,
     dto: KdVisitDto,
     photo: Express.Multer.File,
   ) {
-    // KD visits are for all field tiers (Tier 1–4)
     if (!FIELD_TIERS.includes(requester.tier as any)) {
       throw new ForbiddenException('KD visits are recorded by field agents (Tier 1–4) only');
     }
@@ -212,9 +234,9 @@ export class AttendanceService {
   // ── End KD Visit ───────────────────────────────────────────────────────────
 
   /**
-   * Logs that the agent has left a KD. The client pairs this event with the
-   * preceding KD_VISIT row by matching kdAccountId + date on the frontend to
-   * calculate visit duration. The server records the departure GPS and time.
+   * Logs that the agent has left a KD. Stores `parentEventId` pointing at the
+   * opening KD_VISIT row so the pair is always unambiguously linked — even if
+   * the same customer is visited twice in a day.
    */
   async endKdVisit(
     requester: JwtPayload,
@@ -225,7 +247,7 @@ export class AttendanceService {
       throw new ForbiddenException('KD visits are recorded by field agents (Tier 1–4) only');
     }
 
-    // Verify there is an open KD_VISIT for this KD today
+    // Verify there is an open KD_VISIT for this KD today (no existing end)
     const today = new Date();
     today.setUTCHours(0, 0, 0, 0);
 
@@ -235,6 +257,8 @@ export class AttendanceService {
         type:        AttendanceType.KD_VISIT,
         kdAccountId: dto.kdAccountId,
         serverTime:  { gte: today },
+        // Ensure no KD_VISIT_END already references this visit
+        children:    { none: {} },
       },
       orderBy: { serverTime: 'desc' },
     });
@@ -242,22 +266,6 @@ export class AttendanceService {
     if (!openVisit) {
       throw new BadRequestException(
         'No open KD visit found for this customer today. Log a KD Visit arrival first.',
-      );
-    }
-
-    // Check this KD has not already been ended today
-    const alreadyEnded = await this.prisma.attendanceEvent.findFirst({
-      where: {
-        userId:      requester.sub,
-        type:        AttendanceType.KD_VISIT_END as any,
-        kdAccountId: dto.kdAccountId,
-        serverTime:  { gte: today },
-      },
-    });
-
-    if (alreadyEnded) {
-      throw new BadRequestException(
-        'A KD visit end has already been logged for this customer today.',
       );
     }
 
@@ -276,27 +284,23 @@ export class AttendanceService {
 
     return this.prisma.attendanceEvent.create({
       data: {
-        userId:      requester.sub,
-        type:        'KD_VISIT_END' as any,
-        flag:        AttendanceFlag.ON_TIME,
+        userId:        requester.sub,
+        type:          'KD_VISIT_END' as any,
+        flag:          AttendanceFlag.ON_TIME,
         photoUrl,
-        latitude:    dto.latitude,
-        longitude:   dto.longitude,
-        address:     kdAddress ?? null,
-        kdAccountId: dto.kdAccountId,
+        latitude:      dto.latitude,
+        longitude:     dto.longitude,
+        address:       kdAddress ?? null,
+        kdAccountId:   dto.kdAccountId,
         deviceTime,
-        note:        dto.note,
+        note:          dto.note,
+        parentEventId: openVisit.id,  // ← links back to the KD_VISIT arrival
       },
     });
   }
 
   // ─── Offline Batch Sync ───────────────────────────────────────────────────
 
-  /**
-   * Accepts a batch of offline-queued events from the mobile device.
-   * Events are deduplicated by (userId, type, deviceDate) before insert.
-   * Returns a summary of processed vs skipped records.
-   */
   async syncOfflineBatch(
     requester: JwtPayload,
     events: OfflineSyncItemDto[],
@@ -372,7 +376,6 @@ export class AttendanceService {
   async findEvents(requester: JwtPayload, query: AttendanceQueryDto) {
     const { userId, from, to, type } = query;
 
-    // Tier 1 can only see their own events
     const resolvedUserId =
       requester.tier === 'TIER1' ? requester.sub : (userId ?? requester.sub);
 
@@ -393,15 +396,8 @@ export class AttendanceService {
     });
   }
 
-  // ─── findAll — referenced by GET /attendance ──────────────────────────────
+  // ─── findAll ──────────────────────────────────────────────────────────────
 
-  /**
-   * Paginated attendance events (CLOCK_IN + CLOCK_OUT by default).
-   *
-   * Scoping:
-   *  - TIER1–TIER4 (field agents)  → own events only; ?userId is ignored
-   *  - Oversight tiers              → all events; optionally filter by ?userId
-   */
   async findAll(
     query: AttendanceQueryDto & { page?: number; limit?: number },
     requester: JwtPayload,
@@ -450,14 +446,8 @@ export class AttendanceService {
     return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
-  // ─── findKdVisits — referenced by GET /attendance/kd-visits ──────────────
+  // ─── findKdVisits ─────────────────────────────────────────────────────────
 
-  /**
-   * Paginated KD visit pairs (arrival + departure).
-   * visitEnd is null when the agent has not yet ended the visit.
-   *
-   * Scoping: field agents see own; oversight roles see all.
-   */
   async findKdVisits(
     query: AttendanceQueryDto & { page?: number; limit?: number },
     requester: JwtPayload,
@@ -510,71 +500,30 @@ export class AttendanceService {
     return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
-  // ─── findByUser — referenced by GET /attendance/user/:userId ─────────────
+  // ─── findByUser ───────────────────────────────────────────────────────────
 
   /**
-   * Full attendance history for a specific user.
+   * Attendance history for a specific user, returned as daily scored rows.
    *
-   * - Field agents: only their own userId is accepted (403 otherwise).
-   * - Oversight roles: any userId.
+   * Each row shows clockIn and clockOut scores (0 or 1) based on flag:
+   * only ON_TIME events earn a point — LATE and OUTSIDE_WINDOW score 0.
+   * This is the format used for payment calculation.
    */
   async findByUser(
     targetUserId: string,
     query: AttendanceQueryDto & { page?: number; limit?: number },
     requester: JwtPayload,
-  ): Promise<PaginatedResult<any>> {
+  ): Promise<PaginatedResult<DailyAttendanceScore>> {
     const isFieldAgent = FIELD_TIERS.includes(requester.tier as any);
     if (isFieldAgent && requester.sub !== targetUserId) {
       throw new ForbiddenException('Field agents can only view their own attendance history');
     }
 
-    const page  = Math.max(1, Number(query.page)  || 1);
-    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
-    const skip  = (page - 1) * limit;
-
-    const where: Prisma.AttendanceEventWhereInput = {
-      userId: targetUserId,
-      ...(query.type ? { type: query.type as AttendanceType } : {}),
-      ...(query.from || query.to
-        ? {
-            serverTime: {
-              ...(query.from ? { gte: new Date(query.from) } : {}),
-              ...(query.to   ? { lte: new Date(query.to)   } : {}),
-            },
-          }
-        : {}),
-    };
-
-    const [data, total] = await Promise.all([
-      this.prisma.attendanceEvent.findMany({
-        where,
-        orderBy: { serverTime: 'desc' },
-        skip,
-        take: limit,
-        include: {
-          user: {
-            select: {
-              id: true, fullName: true, employeeRef: true,
-              role: true, tier: true, team: true, region: true,
-            },
-          },
-          kdAccount: { select: { id: true, businessName: true } },
-        },
-      }),
-      this.prisma.attendanceEvent.count({ where }),
-    ]);
-
-    return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+    return this.getScoredAttendanceHistory(targetUserId, query);
   }
 
   // ─── TIER5_FIELD_SUPPORT: All Attendance (platform-wide) ──────────────────
 
-  /**
-   * GET /attendance/support/all
-   *
-   * Platform-wide visibility for TIER5_FIELD_SUPPORT.
-   * Filters: team, tier, region, userId, type, from, to.
-   */
   async findAllForSupport(
     query: {
       team?: string; tier?: string; region?: string; userId?: string;
@@ -627,66 +576,25 @@ export class AttendanceService {
     return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
-  // ─── TIER5_FIELD_SUPPORT: Attendance by User ──────────────────────────────
+  // ─── TIER5_FIELD_SUPPORT: Attendance by User (scored daily format) ─────────
 
   /**
    * GET /attendance/support/user/:userId
    *
-   * Full attendance history for any user — TIER5_FIELD_SUPPORT only.
+   * Returns the same daily-scored format as findByUser — clock-in and
+   * clock-out points per day, ON_TIME only. Used by TIER5_FIELD_SUPPORT
+   * for payment calculation review.
    */
   async findAttendanceByUserForSupport(
     targetUserId: string,
     query: { type?: string; from?: string; to?: string; page?: number; limit?: number },
     _requester: JwtPayload,
-  ): Promise<PaginatedResult<any>> {
-    const page  = Math.max(1, Number(query.page)  || 1);
-    const limit = Math.min(100, Math.max(1, Number(query.limit) || 20));
-    const skip  = (page - 1) * limit;
-
-    const where: Prisma.AttendanceEventWhereInput = {
-      userId: targetUserId,
-      ...(query.type ? { type: query.type as AttendanceType } : {}),
-      ...(query.from || query.to
-        ? {
-            serverTime: {
-              ...(query.from ? { gte: new Date(query.from) } : {}),
-              ...(query.to   ? { lte: new Date(query.to)   } : {}),
-            },
-          }
-        : {}),
-    };
-
-    const [data, total] = await Promise.all([
-      this.prisma.attendanceEvent.findMany({
-        where,
-        orderBy: { serverTime: 'desc' },
-        skip,
-        take: limit,
-        include: {
-          user: {
-            select: {
-              id: true, fullName: true, employeeRef: true,
-              role: true, tier: true, team: true, region: true,
-            },
-          },
-          kdAccount: { select: { id: true, businessName: true } },
-        },
-      }),
-      this.prisma.attendanceEvent.count({ where }),
-    ]);
-
-    return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
+  ): Promise<PaginatedResult<DailyAttendanceScore>> {
+    return this.getScoredAttendanceHistory(targetUserId, query);
   }
 
   // ─── TIER5_FIELD_SUPPORT: All KD Visits (platform-wide, with timeSpent) ───
 
-  /**
-   * GET /attendance/support/kd-visits
-   *
-   * Returns KD_VISIT events paired with their KD_VISIT_END counterpart.
-   * Adds computed timeSpentSeconds and timeSpentMinutes per visit pair.
-   * Filters: team, tier, region, userId, from, to.
-   */
   async findAllKdVisitsForSupport(
     query: {
       team?: string; tier?: string; region?: string; userId?: string;
@@ -741,13 +649,23 @@ export class AttendanceService {
     return { data, meta: { total, page, limit, totalPages: Math.ceil(total / limit) } };
   }
 
-  // ─── TIER5_FIELD_SUPPORT: Single KD Visit (by event ID, with timeSpent) ───
+  // ─── TIER5_FIELD_SUPPORT: Single KD Visit detail with activities ───────────
 
   /**
    * GET /attendance/support/kd-visits/:eventId
    *
-   * Returns a single KD_VISIT event with its matched departure and computed
-   * timeSpentSeconds / timeSpentMinutes. Throws 404 if not found.
+   * Returns the KD_VISIT + its paired KD_VISIT_END (via parentEventId),
+   * computed timeSpent, and all activities the agent performed at that
+   * customer during the visit window:
+   *
+   *  - purchaseOrders   — POs raised for this customer by this agent
+   *  - collections      — cash/transfer collections recorded for this customer
+   *  - secondarySales   — secondary sales logged at this KD account
+   *  - stockCollections — stock pick-ups from this KD
+   *  - invoices         — secondary sale invoices raised against this customer
+   *
+   * The visit window is [KD_VISIT.serverTime, KD_VISIT_END.serverTime].
+   * If the visit has not ended yet, activities are fetched up to now().
    */
   async findKdVisitByIdForSupport(eventId: string): Promise<any> {
     const arrival = await this.prisma.attendanceEvent.findFirst({
@@ -759,7 +677,7 @@ export class AttendanceService {
             role: true, tier: true, team: true, region: true,
           },
         },
-        kdAccount: { select: { id: true, businessName: true } },
+        kdAccount: { select: { id: true, businessName: true, customerType: true } },
       },
     });
 
@@ -767,24 +685,144 @@ export class AttendanceService {
       throw new NotFoundException(`KD visit event '${eventId}' not found`);
     }
 
-    return this.pairKdVisitWithEnd(arrival);
+    const paired = await this.pairKdVisitWithEnd(arrival);
+
+    // Visit window: start → end (or now if still open)
+    const windowStart = new Date(arrival.serverTime);
+    const windowEnd   = paired.visitEnd
+      ? new Date(paired.visitEnd.serverTime)
+      : new Date();
+
+    const customerId = arrival.kdAccountId!;
+    const agentId    = arrival.userId;
+
+    // Fetch all activities in parallel — scoped to this agent + this customer
+    // + within the visit time window
+    const [
+      purchaseOrders,
+      collections,
+      secondarySales,
+      stockCollections,
+      invoices,
+    ] = await Promise.all([
+      // Primary-side: POs raised by the agent for this KD customer
+      this.prisma.purchaseOrder.findMany({
+        where: {
+          customerId,
+          createdById: agentId,
+          createdAt:   { gte: windowStart, lte: windowEnd },
+        },
+        select: {
+          id: true, orderRef: true, status: true,
+          totalKobo: true, createdAt: true,
+          items: {
+            select: {
+              product: { select: { id: true, name: true, category: true } },
+              quantityCartons: true, lineTotalKobo: true,
+            },
+          },
+        },
+      }),
+
+      // Cash / transfer collections recorded against this customer
+      this.prisma.collection.findMany({
+        where: {
+          customerId,
+          recordedById: agentId,
+          createdAt:    { gte: windowStart, lte: windowEnd },
+        },
+        select: {
+          id: true, amountKobo: true, paymentMode: true,
+          depositorName: true, collectedAt: true, note: true,
+        },
+      }),
+
+      // Secondary sales made at this KD account
+      this.prisma.secondarySale.findMany({
+        where: {
+          kdAccountId: customerId,
+          userId:      agentId,
+          createdAt:   { gte: windowStart, lte: windowEnd },
+        },
+        select: {
+          id: true, deviceTime: true, note: true,
+          items: {
+            select: {
+              buyerType: true, quantityCartons: true,
+              quantityRows: true, quantityPieces: true,
+              product: { select: { id: true, name: true, category: true } },
+            },
+          },
+        },
+      }),
+
+      // Stock collections (pick-up from this KD's physical stock)
+      this.prisma.stockCollection.findMany({
+        where: {
+          sourceId:  customerId,
+          userId:    agentId,
+          createdAt: { gte: windowStart, lte: windowEnd },
+        },
+        select: {
+          id: true, collectionRef: true, status: true,
+          subtotalKobo: true, createdAt: true,
+          items: {
+            select: {
+              product: { select: { id: true, name: true, category: true } },
+              quantityCartons: true, lineTotalKobo: true,
+            },
+          },
+        },
+      }),
+
+      // Secondary sale invoices raised against this customer
+      this.prisma.secondarySaleInvoice.findMany({
+        where: {
+          customerId,
+          soldById:  agentId,
+          createdAt: { gte: windowStart, lte: windowEnd },
+        },
+        select: {
+          id: true, invoiceRef: true, status: true,
+          totalKobo: true, paidKobo: true, balanceKobo: true,
+          createdAt: true,
+          items: {
+            select: {
+              product: { select: { id: true, name: true, category: true } },
+              quantityCartons: true, lineTotalKobo: true,
+            },
+          },
+        },
+      }),
+    ]);
+
+    // Build a summary of what happened during the visit
+    const activitySummary = {
+      hasPurchaseOrders:   purchaseOrders.length   > 0,
+      hasCollections:      collections.length       > 0,
+      hasSecondarySales:   secondarySales.length    > 0,
+      hasStockCollections: stockCollections.length  > 0,
+      hasInvoices:         invoices.length          > 0,
+      totalActivities:
+        purchaseOrders.length + collections.length +
+        secondarySales.length + stockCollections.length + invoices.length,
+    };
+
+    return {
+      ...paired,
+      activities: {
+        summary:         activitySummary,
+        purchaseOrders,
+        collections,
+        secondarySales,
+        stockCollections,
+        invoices,
+      },
+    };
   }
 
   // ─── Non-throwing clock-in status check ──────────────────────────────────
 
-  /**
-   * Non-throwing clock-in status check for today, scoped to the SERVER's
-   * calendar day via serverTime — the same signal ClockInGuard checks, so
-   * the dashboard's "you're marked absent" banner always agrees with
-   * whether write endpoints will actually let the person through.
-   *
-   * Deliberately NOT reused from checkDuplicateEvent()/assertClockInExists()
-   * above: those check deviceTime (the field agent's phone clock, which
-   * offline sync can backdate or delay), while this checks serverTime —
-   * the two are different signals for different purposes. ClockInGuard
-   * and this method both care "did the server actually receive a clock-in
-   * today," not "what date did the agent's phone claim."
-   */
   async hasClockedInToday(userId: string): Promise<boolean> {
     const { gte } = this.dayBoundsUTC(new Date());
 
@@ -828,7 +866,6 @@ export class AttendanceService {
     const clockIn  = todayEvents.find((e) => e.type === AttendanceType.CLOCK_IN)  ?? null;
     const clockOut = todayEvents.find((e) => e.type === AttendanceType.CLOCK_OUT) ?? null;
 
-    // Determine current status
     let status: 'NOT_CLOCKED_IN' | 'CLOCKED_IN' | 'CLOCKED_OUT';
     if (!clockIn) {
       status = 'NOT_CLOCKED_IN';
@@ -838,7 +875,6 @@ export class AttendanceService {
       status = 'CLOCKED_OUT';
     }
 
-    // Duration in minutes if both events exist
     let durationMinutes: number | null = null;
     if (clockIn && clockOut) {
       durationMinutes = Math.round(
@@ -847,7 +883,7 @@ export class AttendanceService {
     }
 
     return {
-      date:            new Date().toISOString().slice(0, 10), // YYYY-MM-DD UTC
+      date:            new Date().toISOString().slice(0, 10),
       status,
       clockedInToday:  clockIn !== null,
       clockedOutToday: clockOut !== null,
@@ -878,23 +914,105 @@ export class AttendanceService {
   // ─── Private helpers ──────────────────────────────────────────────────────
 
   /**
-   * Pairs a KD_VISIT arrival event with its KD_VISIT_END departure on the
-   * same UTC calendar day, then computes the time spent at the customer site.
+   * Core payment-score logic.
+   *
+   * Fetches all CLOCK_IN and CLOCK_OUT events for the target user in the
+   * requested date range, groups them by UTC calendar day, and returns one
+   * scored row per day.
+   *
+   * Scoring rule (per product owner spec):
+   *   ON_TIME clock-in  → clockIn  = 1
+   *   ON_TIME clock-out → clockOut = 1
+   *   LATE / OUTSIDE_WINDOW / MISSED → score = 0 for that event
+   *
+   * Pagination is applied AFTER grouping — "page" refers to days, not raw
+   * events. A day with no ON_TIME events still appears so the viewer can
+   * see LATE / absent records.
    */
-  private async pairKdVisitWithEnd(arrival: any): Promise<any> {
-    const dayStart = new Date(arrival.serverTime);
-    dayStart.setUTCHours(0, 0, 0, 0);
-    const dayEnd = new Date(dayStart);
-    dayEnd.setUTCDate(dayEnd.getUTCDate() + 1);
+  private async getScoredAttendanceHistory(
+    userId: string,
+    query: { from?: string; to?: string; page?: number; limit?: number },
+  ): Promise<PaginatedResult<DailyAttendanceScore>> {
+    const page  = Math.max(1, Number(query.page)  || 1);
+    const limit = Math.min(100, Math.max(1, Number(query.limit) || 31));
 
-    const visitEnd = await this.prisma.attendanceEvent.findFirst({
+    // Pull all CLOCK_IN + CLOCK_OUT events for this user in the range.
+    // No Prisma pagination here — we group by day first, then paginate days.
+    const events = await this.prisma.attendanceEvent.findMany({
       where: {
-        userId:      arrival.userId,
-        type:        'KD_VISIT_END' as any,
-        kdAccountId: arrival.kdAccountId,
-        serverTime:  { gte: dayStart, lt: dayEnd },
+        userId,
+        type: { in: [AttendanceType.CLOCK_IN, AttendanceType.CLOCK_OUT] },
+        ...(query.from || query.to
+          ? {
+              serverTime: {
+                ...(query.from ? { gte: new Date(query.from) } : {}),
+                ...(query.to   ? { lte: new Date(query.to)   } : {}),
+              },
+            }
+          : {}),
       },
       orderBy: { serverTime: 'asc' },
+      select: {
+        type: true, flag: true, serverTime: true,
+      },
+    });
+
+    // Group by UTC date string (YYYY-MM-DD)
+    const dayMap = new Map<string, { clockIn?: typeof events[0]; clockOut?: typeof events[0] }>();
+
+    for (const ev of events) {
+      const date = ev.serverTime.toISOString().slice(0, 10);
+      if (!dayMap.has(date)) dayMap.set(date, {});
+      const day = dayMap.get(date)!;
+      if (ev.type === AttendanceType.CLOCK_IN  && !day.clockIn)  day.clockIn  = ev;
+      if (ev.type === AttendanceType.CLOCK_OUT && !day.clockOut) day.clockOut = ev;
+    }
+
+    // Sort days descending (most recent first), then paginate
+    const sortedDates = [...dayMap.keys()].sort((a, b) => b.localeCompare(a));
+    const total       = sortedDates.length;
+    const pageDates   = sortedDates.slice((page - 1) * limit, page * limit);
+
+    const data: DailyAttendanceScore[] = pageDates.map((date) => {
+      const day      = dayMap.get(date)!;
+      const ciFlag   = day.clockIn?.flag  ?? null;
+      const coFlag   = day.clockOut?.flag ?? null;
+
+      // Only ON_TIME earns the point
+      const ciScore  = ciFlag === AttendanceFlag.ON_TIME ? 1 : 0;
+      const coScore  = coFlag === AttendanceFlag.ON_TIME ? 1 : 0;
+
+      return {
+        date,
+        clockIn:      ciScore as 0 | 1,
+        clockInFlag:  ciFlag,
+        clockInTime:  day.clockIn?.serverTime.toISOString()  ?? null,
+        clockOut:     coScore as 0 | 1,
+        clockOutFlag: coFlag,
+        clockOutTime: day.clockOut?.serverTime.toISOString() ?? null,
+        totalPoints:  ciScore + coScore,
+      };
+    });
+
+    return {
+      data,
+      meta: { total, page, limit, totalPages: Math.ceil(total / limit) },
+    };
+  }
+
+  /**
+   * Pairs a KD_VISIT arrival with its KD_VISIT_END departure.
+   *
+   * Now uses `parentEventId` (the end event stores the start event's ID)
+   * for an exact, unambiguous lookup — no day-range matching needed.
+   * Falls back to null if the visit has not been ended yet.
+   */
+  private async pairKdVisitWithEnd(arrival: any): Promise<any> {
+    const visitEnd = await this.prisma.attendanceEvent.findFirst({
+      where: {
+        parentEventId: arrival.id,
+        type:          'KD_VISIT_END' as any,
+      },
       select: {
         id: true, type: true, photoUrl: true,
         latitude: true, longitude: true, address: true,
@@ -941,9 +1059,6 @@ export class AttendanceService {
   }
 
   private dayBoundsUTC(date: Date): { gte: Date; lte: Date } {
-    // Use UTC day boundaries so the check is consistent regardless of where
-    // the server runs. Nigeria is UTC+1 — using local time causes off-by-one
-    // errors at midnight WAT where the server's UTC calendar day differs.
     const start = new Date(Date.UTC(
       date.getUTCFullYear(),
       date.getUTCMonth(),
@@ -964,9 +1079,6 @@ export class AttendanceService {
     type: AttendanceType,
     deviceTime: Date,
   ): Promise<boolean> {
-    // Check against serverTime (what the server recorded) rather than
-    // deviceTime (what the phone claims) — serverTime is the authoritative
-    // signal and cannot be manipulated by the client.
     const { gte, lte } = this.dayBoundsUTC(new Date());
     const existing = await this.prisma.attendanceEvent.findFirst({
       where: { userId, type, serverTime: { gte, lte } },
@@ -980,11 +1092,7 @@ export class AttendanceService {
     type: AttendanceType,
     deviceTime: Date,
   ): Promise<void> {
-    const isDuplicate = await this.checkDuplicateEvent(
-      userId,
-      type,
-      deviceTime,
-    );
+    const isDuplicate = await this.checkDuplicateEvent(userId, type, deviceTime);
     if (isDuplicate) {
       const label = type === AttendanceType.CLOCK_IN ? 'clock-in' : 'clock-out';
       throw new BadRequestException(
