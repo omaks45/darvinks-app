@@ -1,4 +1,3 @@
-
 import {
   Body,
   Controller,
@@ -28,9 +27,10 @@ import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { Roles } from '@common/decorators/roles.decorator';
 import { RolesGuard } from '@common/guards/roles.guard';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
+import { SkipClockInCheck } from '@common/guards/clock-in.guard';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import { attendancePhotoFilter } from '@modules/auths/auths.constant';
-import { AttendanceService, PaginatedResult } from './attendance.service';
+import { AttendanceService, PaginatedResult, DailyAttendanceScore } from './attendance.service';
 import {
   AttendanceQueryDto,
   ClockEventDto,
@@ -49,6 +49,7 @@ export class AttendanceController {
 
   // ─── Clock In ─────────────────────────────────────────────────────────────
 
+  @SkipClockInCheck()
   @Post('clock-in')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Submit clock-in (GPS photo mandatory, gallery blocked)' })
@@ -73,6 +74,7 @@ export class AttendanceController {
 
   // ─── Clock Out ────────────────────────────────────────────────────────────
 
+  @SkipClockInCheck()
   @Post('clock-out')
   @HttpCode(HttpStatus.CREATED)
   @ApiOperation({ summary: 'Submit clock-out (GPS photo mandatory)' })
@@ -203,6 +205,7 @@ export class AttendanceController {
 
   // ─── Offline Batch Sync ───────────────────────────────────────────────────
 
+  @SkipClockInCheck()
   @Post('sync')
   @HttpCode(HttpStatus.OK)
   @ApiOperation({ summary: 'Offline batch sync — submit queued attendance events' })
@@ -225,6 +228,7 @@ export class AttendanceController {
 
   // ─── Today's Status ───────────────────────────────────────────────────────
 
+  @SkipClockInCheck()
   @Get('today')
   @ApiOperation({
     summary: "Today's clock-in/out status",
@@ -397,7 +401,7 @@ export class AttendanceController {
     @Param('userId') userId: string,
     @CurrentUser() user: JwtPayload,
     @Query() query: { from?: string; to?: string; page?: number; limit?: number },
-  ) {
+  ): Promise<PaginatedResult<DailyAttendanceScore>> {
     return this.attendanceService.findAttendanceByUserForSupport(userId, query, user);
   }
 

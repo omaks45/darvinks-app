@@ -31,6 +31,8 @@ import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import { UsersService } from './user.service';
 import { UpdateProfileDto } from './dto/update-profile.dto';
 import { FindUserToLinkDto, AddDirectReportDto } from './dto/add-direct-report.dto';
+import { SkipClockInCheck } from '@common/guards/clock-in.guard';
+
 
 @ApiTags('Users')
 @ApiBearerAuth('access-token')
@@ -41,6 +43,7 @@ export class UsersController {
 
   @ApiResponse({ status: 200, description: 'Authenticated user\'s own profile. idCardUrl will be null for a few seconds after first registration while the card generates in the background — poll this endpoint until it is populated.', schema: { example: { success: true, data: { id: 'user-id', employeeRef: 'Dar-00000007', fullName: 'Kenny Solape', email: 'rep@darvinks.com', phone: '+2348011111111', role: 'SALES_REPRESENTATIVE', roleLabel: 'Sales Representative', tier: 'TIER2', team: 'RADIANT', region: 'SOUTH_WEST', state: 'lagos', profilePictureUrl: 'https://res.cloudinary.com/dwiouwwom/image/upload/v.../photo.jpg', idCardUrl: 'https://res.cloudinary.com/dwiouwwom/image/upload/v.../Dar-00000007.pdf', isActive: true, accountOrigin: 'SELF_REGISTERED', createdAt: '2026-07-24T20:02:00.000Z' }, timestamp: '2026-07-29T12:00:00.000Z' } } })
   @ApiResponse({ status: 401, description: 'Unauthorized', schema: { example: { success: false, statusCode: 401, message: 'Unauthorized', timestamp: '2026-07-29T12:00:00.000Z' } } })
+  @SkipClockInCheck()
   @Get('me')
   @ApiOperation({ summary: "Get the current user's own profile" })
   getMyProfile(@CurrentUser() user: JwtPayload) {
