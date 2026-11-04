@@ -183,9 +183,16 @@ export class AdminService {
     const tier = tierFromRole(dto.role);
     const roleLabel = labelFromRole(dto.role);
 
-    // 9. Generate employee reference
-    const userCount = await this.prisma.user.count();
-    const employeeRef = generateEmployeeRef(userCount + 1);
+    // 9. Generate employee reference — use max existing ref to avoid collisions
+    // after deletions, user.count() can collide with previously used refs
+    const lastUser = await this.prisma.user.findFirst({
+      orderBy: { employeeRef: 'desc' },
+      select: { employeeRef: true },
+    });
+    const lastNum = lastUser
+      ? parseInt(lastUser.employeeRef.replace('Dar-', ''), 10)
+      : 0;
+    const employeeRef = generateEmployeeRef(lastNum + 1);
 
     // 10. Create the user record
     const user = await this.prisma.user.create({

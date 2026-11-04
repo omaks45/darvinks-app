@@ -57,10 +57,16 @@ export class AuthService {
 
     // 4. Auto-assign region from state + team
     const region = resolveRegion(dto.state, dto.team);
-
-    // 5. Generate employee reference (sequence from user count)
-    const userCount   = await this.prisma.user.count();
-    const employeeRef = generateEmployeeRef(userCount + 1);
+    // 9. Generate employee reference — use max existing ref to avoid collisions
+    // after deletions, user.count() can collide with previously used refs
+    const lastUser = await this.prisma.user.findFirst({
+      orderBy: { employeeRef: 'desc' },
+      select: { employeeRef: true },
+    });
+    const lastNum = lastUser
+      ? parseInt(lastUser.employeeRef.replace('Dar-', ''), 10)
+      : 0;
+    const employeeRef = generateEmployeeRef(lastNum + 1);
 
     // 6. Upload profile picture if provided
     let profilePictureUrl: string | undefined;
@@ -174,10 +180,17 @@ export class AuthService {
     // 7. Hash password
     const rounds      = this.config.get<number>('bcryptRounds') ?? 12;
     const passwordHash = await bcrypt.hash(dto.password, rounds);
-
-    // 8. Generate employee reference
-    const userCount   = await this.prisma.user.count();
-    const employeeRef = generateEmployeeRef(userCount + 1);
+    
+    // 8. Generate employee reference — use max existing ref to avoid collisions
+    // after deletions, user.count() can collide with previously used refs
+    const lastUser = await this.prisma.user.findFirst({
+      orderBy: { employeeRef: 'desc' },
+      select: { employeeRef: true },
+    });
+    const lastNum = lastUser
+      ? parseInt(lastUser.employeeRef.replace('Dar-', ''), 10)
+      : 0;
+    const employeeRef = generateEmployeeRef(lastNum + 1);
 
     // 9. Upload profile picture if provided
     let profilePictureUrl: string | undefined;
