@@ -1,0 +1,12 @@
+[
+    {
+        "relation": ["delegate_permission/common.handle_all_urls"],
+        "target": {
+        "namespace": "android_app",
+        "package_name": "com.example.darvinks",
+        "sha256_cert_fingerprints": [
+            "8D:F4:74:4B:3F:1D:4D:29:5D:0F:2B:D5:F2:A2:3F:FD:A7:8C:AE:DD:92:39:B7:49:7B:E4:BD:D0:A6:58:21:CD"
+        ]
+        }
+    }
+]

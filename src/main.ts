@@ -1,4 +1,3 @@
-
 import 'reflect-metadata';
 import { NestFactory, Reflector } from '@nestjs/core';
 import { ClassSerializerInterceptor, ValidationPipe } from '@nestjs/common';
@@ -8,6 +7,7 @@ import { AppModule } from './app.module';
 import { GlobalExceptionFilter } from '@common/filters/http-exception.filter';
 import { TransformInterceptor } from '@common/interceptors/transform.interceptor';
 import type { AppConfig } from '@common/config/app.config';
+import { join } from 'path';
 
 // BigInt serialization — Prisma returns BigInt for monetary fields (kobo values).
 // JSON.stringify cannot handle BigInt natively; this converts them to Number.
@@ -18,6 +18,7 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create(AppModule, {
     logger: ['log', 'warn', 'error', 'debug'],
   });
+
 
   const config = app.get(ConfigService<AppConfig>);
   const port = config.get<number>('port') ?? 3000;
@@ -30,6 +31,21 @@ async function bootstrap(): Promise<void> {
   // Registered before any guards or interceptors so Render can always reach it
   app.use(`/${prefix}/health`, (_req: any, res: any) => {
     res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
+  });
+
+  // ── Deep link verification files ───────────────────────────────────────────
+  // Served outside the api/v1 prefix so the OS can find them at the exact URLs:
+  //   Android: GET /.well-known/assetlinks.json
+  //   iOS:     GET /.well-known/apple-app-site-association
+  // Rules: must return HTTP 200 with Content-Type: application/json — no redirects.
+  app.use('/.well-known/assetlinks.json', (_req: any, res: any) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.status(200).sendFile(join(process.cwd(), 'well-known', 'assetlinks.json'));
+  });
+
+  app.use('/.well-known/apple-app-site-association', (_req: any, res: any) => {
+    res.setHeader('Content-Type', 'application/json');
+    res.status(200).sendFile(join(process.cwd(), 'well-known', 'apple-app-site-association'));
   });
 
   app.useGlobalPipes(
