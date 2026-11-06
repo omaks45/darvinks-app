@@ -23,8 +23,9 @@ import { PrismaModule } from '@common/prisma/prisma.module';
     IdCardWorker,
   ],
   exports: [
+    BullModule,             // so AuthsModule, AdminModule etc. can inject the queue
     NotificationsService,
-    PushNotificationService,  // exported so PO, target, customer modules can inject it
+    PushNotificationService,
     IdCardWorker,
   ],
 })

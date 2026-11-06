@@ -20,6 +20,12 @@ interface IdCardJob {
   roleLabel: string;
 }
 
+interface OtpEmailJob {
+  to:       string;
+  fullName: string;
+  otp:      string;
+}
+
 interface ProvisioningEmailJob {
   userId:            string;
   email:             string;
@@ -79,9 +85,68 @@ export class NotificationsProcessor implements OnModuleInit {
     this.logger.warn(
       `Attendance flag → user=${userId} | type=${type} | flag=${flag}`,
     );
-    // Send push notification to the agent if they clocked in late or outside window
     await this.push.notifyAttendanceFlag({ userId, type, flag });
   }
+
+  // ── Forgot-password OTP ───────────────────────────────────────────────────
+
+  @Process('send-otp-email')
+  async handleOtpEmail(job: Job<OtpEmailJob>): Promise<void> {
+    const { to, fullName, otp } = job.data;
+    this.logger.log(`Sending OTP email → ${to}`);
+
+    try {
+      await this.mailService.sendForgotPasswordEmail({ to, fullName, otp });
+      this.logger.log(`OTP email sent → ${to}`);
+    } catch (error) {
+      this.logger.error(`OTP email FAILED for ${to}`, error);
+      throw error;
+    }
+  }
+
+  // ── Provisioning welcome email ────────────────────────────────────────────
+
+  @Process('send-provisioning-email')
+  async handleProvisioningEmail(job: Job<ProvisioningEmailJob>): Promise<void> {
+    const { email, fullName, roleLabel, temporaryPassword, employeeRef } = job.data;
+    this.logger.log(`Sending provisioning email → ${email} (${employeeRef})`);
+
+    try {
+      await this.mailService.sendProvisioningEmail({
+        to: email,
+        fullName,
+        roleLabel,
+        employeeRef,
+        temporaryPassword,
+      });
+      this.logger.log(`Provisioning email sent → ${email}`);
+    } catch (error) {
+      this.logger.error(`Provisioning email FAILED for ${email}`, error);
+      throw error;
+    }
+  }
+
+  // ── Admin-triggered password reset ───────────────────────────────────────
+
+  @Process('send-password-reset-email')
+  async handlePasswordResetEmail(job: Job<PasswordResetEmailJob>): Promise<void> {
+    const { email, fullName, temporaryPassword } = job.data;
+    this.logger.log(`Sending password reset email → ${email}`);
+
+    try {
+      await this.mailService.sendPasswordResetEmail({
+        to: email,
+        fullName,
+        temporaryPassword,
+      });
+      this.logger.log(`Password reset email sent → ${email}`);
+    } catch (error) {
+      this.logger.error(`Password reset email FAILED for ${email}`, error);
+      throw error;
+    }
+  }
+
+  // ── ID card generation ────────────────────────────────────────────────────
 
   @Process('generate-id-card')
   async handleGenerateIdCard(job: Job<IdCardJob>): Promise<void> {
@@ -123,42 +188,6 @@ export class NotificationsProcessor implements OnModuleInit {
         `generate-id-card FAILED for userId=${userId}`,
         error instanceof Error ? error.stack : error,
       );
-      throw error;
-    }
-  }
-
-  @Process('send-provisioning-email')
-  async handleProvisioningEmail(job: Job<ProvisioningEmailJob>): Promise<void> {
-    const { email, fullName, roleLabel, temporaryPassword, employeeRef } = job.data;
-    this.logger.log(`Sending provisioning email → ${email} (${employeeRef})`);
-
-    try {
-      await this.mailService.sendProvisioningEmail({
-        to: email,
-        fullName,
-        roleLabel,
-        employeeRef,
-        temporaryPassword,
-      });
-    } catch (error) {
-      this.logger.error(`Provisioning email FAILED for ${email}`, error);
-      throw error;
-    }
-  }
-
-  @Process('send-password-reset-email')
-  async handlePasswordResetEmail(job: Job<PasswordResetEmailJob>): Promise<void> {
-    const { email, fullName, temporaryPassword } = job.data;
-    this.logger.log(`Sending password reset email → ${email}`);
-
-    try {
-      await this.mailService.sendPasswordResetEmail({
-        to: email,
-        fullName,
-        temporaryPassword,
-      });
-    } catch (error) {
-      this.logger.error(`Password reset email FAILED for ${email}`, error);
       throw error;
     }
   }
