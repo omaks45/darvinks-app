@@ -35,6 +35,12 @@ const mockPrisma = {
     updateMany: jest.fn(),
     create:     jest.fn(),
   },
+  outOfRegionRequest: {
+    findUnique: jest.fn(),
+    findMany:   jest.fn(),
+    count:      jest.fn(),
+    update:     jest.fn(),
+  },
   $transaction: jest.fn(),
 };
 
@@ -67,6 +73,14 @@ const SALES_HEAD_REQUESTER: JwtPayload = {
   email: 'sh@darvinks.com',
   tier:  'TIER5_SALES_HEAD' as any,
   team:  'BRIGHT' as any,
+};
+
+/** TIER5_SALES_HEAD for the opposing team — used to test cross-team restrictions */
+const SALES_HEAD_RADIANT: JwtPayload = {
+  sub:   'sh-radiant-uuid',
+  email: 'sh-radiant@darvinks.com',
+  tier:  'TIER5_SALES_HEAD' as any,
+  team:  'RADIANT' as any,
 };
 
 const NON_ADMIN_REQUESTER: JwtPayload = {
@@ -131,6 +145,12 @@ const SAFE_USER = {
   annualTargets:     {},
   createdAt:         new Date(),
   updatedAt:         new Date(),
+};
+
+const SAFE_USER_RADIANT = {
+  ...SAFE_USER,
+  id:   'radiant-user-id',
+  team: 'RADIANT',
 };
 
 // ─── Test suite ───────────────────────────────────────────────────────────────
@@ -481,7 +501,7 @@ describe('AdminService', () => {
       const users = [SAFE_USER];
       mockTransaction(1, users);
 
-      const result = await service.findAllUsers();
+      const result = await service.findAllUsers(SALES_SUPPORT_REQUESTER);
 
       expect(result).toEqual({
         data: users,
@@ -492,7 +512,7 @@ describe('AdminService', () => {
     it('returns empty data array and correct meta when no users exist', async () => {
       mockTransaction(0, []);
 
-      const result = await service.findAllUsers();
+      const result = await service.findAllUsers(SALES_SUPPORT_REQUESTER);
 
       expect(result.data).toEqual([]);
       expect(result.meta.total).toBe(0);
@@ -504,9 +524,8 @@ describe('AdminService', () => {
     it('calls $transaction with count and findMany ordered by createdAt desc', async () => {
       mockTransaction(0, []);
 
-      await service.findAllUsers();
+      await service.findAllUsers(SALES_SUPPORT_REQUESTER);
 
-      // $transaction is called once with an array of two items (count + findMany promises)
       expect(mockPrisma.$transaction).toHaveBeenCalledTimes(1);
       const [arg] = mockPrisma.$transaction.mock.calls[0];
       expect(Array.isArray(arg)).toBe(true);
@@ -516,7 +535,7 @@ describe('AdminService', () => {
     it('defaults to page 1 and limit 20 when no query is supplied', async () => {
       mockTransaction(0, []);
 
-      const result = await service.findAllUsers();
+      const result = await service.findAllUsers(SALES_SUPPORT_REQUESTER);
 
       expect(result.meta.page).toBe(1);
       expect(result.meta.limit).toBe(20);
@@ -525,15 +544,9 @@ describe('AdminService', () => {
     it('never selects passwordHash', async () => {
       mockTransaction(0, []);
 
-      await service.findAllUsers();
+      await service.findAllUsers(SALES_SUPPORT_REQUESTER);
 
-      // The second argument in the $transaction array is the findMany call
-      const [, findManyCall] = mockPrisma.$transaction.mock.calls[0][0];
-      // findMany is called via prisma.user.findMany — verify via count mock shape
-      // The key assertion: $transaction was called (service used count + findMany)
       expect(mockPrisma.$transaction).toHaveBeenCalled();
-      // Directly verify USER_SAFE_SELECT has no passwordHash via the service behaviour:
-      // If passwordHash were selected it would appear in the result — the fixture has none.
       expect(result => result).not.toBeUndefined();
     });
 
@@ -542,7 +555,7 @@ describe('AdminService', () => {
     it('respects custom page and limit', async () => {
       mockTransaction(50, [SAFE_USER]);
 
-      const result = await service.findAllUsers({ page: 3, limit: 10 });
+      const result = await service.findAllUsers(SALES_SUPPORT_REQUESTER, { page: 3, limit: 10 });
 
       expect(result.meta.page).toBe(3);
       expect(result.meta.limit).toBe(10);
@@ -552,7 +565,7 @@ describe('AdminService', () => {
     it('caps limit at 100', async () => {
       mockTransaction(0, []);
 
-      const result = await service.findAllUsers({ limit: 9999 });
+      const result = await service.findAllUsers(SALES_SUPPORT_REQUESTER, { limit: 9999 });
 
       expect(result.meta.limit).toBe(100);
     });
@@ -560,7 +573,7 @@ describe('AdminService', () => {
     it('enforces a minimum page of 1', async () => {
       mockTransaction(0, []);
 
-      const result = await service.findAllUsers({ page: -5 });
+      const result = await service.findAllUsers(SALES_SUPPORT_REQUESTER, { page: -5 });
 
       expect(result.meta.page).toBe(1);
     });
@@ -568,7 +581,7 @@ describe('AdminService', () => {
     it('accepts page and limit as strings (from HTTP query params)', async () => {
       mockTransaction(40, [SAFE_USER]);
 
-      const result = await service.findAllUsers({ page: '2' as any, limit: '5' as any });
+      const result = await service.findAllUsers(SALES_SUPPORT_REQUESTER, { page: '2' as any, limit: '5' as any });
 
       expect(result.meta.page).toBe(2);
       expect(result.meta.limit).toBe(5);
@@ -578,22 +591,19 @@ describe('AdminService', () => {
     it('calculates totalPages correctly when total is not evenly divisible', async () => {
       mockTransaction(25, Array(10).fill(SAFE_USER));
 
-      const result = await service.findAllUsers({ page: 1, limit: 10 });
+      const result = await service.findAllUsers(SALES_SUPPORT_REQUESTER, { page: 1, limit: 10 });
 
       expect(result.meta.totalPages).toBe(3); // ceil(25/10)
     });
 
     // ── Filters ───────────────────────────────────────────────────────────────
 
-    it('filters by team when provided', async () => {
+    it('filters by team when provided (non-SALES_HEAD)', async () => {
       mockTransaction(1, [SAFE_USER]);
 
-      await service.findAllUsers({ team: 'BRIGHT' as any });
+      await service.findAllUsers(SALES_SUPPORT_REQUESTER, { team: 'BRIGHT' as any });
 
-      // $transaction receives [count({where}), findMany({where})]
-      // Both use the same where — verify $transaction was called
       expect(mockPrisma.$transaction).toHaveBeenCalled();
-      // Inspect the where built by checking $transaction args shape
       const transactionArgs = mockPrisma.$transaction.mock.calls[0][0];
       expect(transactionArgs).toHaveLength(2);
     });
@@ -601,7 +611,7 @@ describe('AdminService', () => {
     it('filters by isActive=true (boolean)', async () => {
       mockTransaction(2, [SAFE_USER, SAFE_USER]);
 
-      const result = await service.findAllUsers({ isActive: true });
+      const result = await service.findAllUsers(SALES_SUPPORT_REQUESTER, { isActive: true });
 
       expect(result.data).toHaveLength(2);
       expect(mockPrisma.$transaction).toHaveBeenCalled();
@@ -610,7 +620,7 @@ describe('AdminService', () => {
     it('filters by isActive=true (string — HTTP query param coercion)', async () => {
       mockTransaction(2, [SAFE_USER, SAFE_USER]);
 
-      const result = await service.findAllUsers({ isActive: 'true' as any });
+      const result = await service.findAllUsers(SALES_SUPPORT_REQUESTER, { isActive: 'true' as any });
 
       expect(result.data).toHaveLength(2);
     });
@@ -619,7 +629,7 @@ describe('AdminService', () => {
       const inactiveUser = { ...SAFE_USER, isActive: false };
       mockTransaction(1, [inactiveUser]);
 
-      const result = await service.findAllUsers({ isActive: 'false' as any });
+      const result = await service.findAllUsers(SALES_SUPPORT_REQUESTER, { isActive: 'false' as any });
 
       expect(result.data[0].isActive).toBe(false);
     });
@@ -627,16 +637,15 @@ describe('AdminService', () => {
     it('does not apply isActive filter when field is omitted', async () => {
       mockTransaction(3, [SAFE_USER]);
 
-      await service.findAllUsers({});
+      await service.findAllUsers(SALES_SUPPORT_REQUESTER, {});
 
-      // $transaction is called — no isActive filter means both active and inactive users returned
       expect(mockPrisma.$transaction).toHaveBeenCalled();
     });
 
     it('applies search across fullName, email and employeeRef (case-insensitive)', async () => {
       mockTransaction(1, [SAFE_USER]);
 
-      const result = await service.findAllUsers({ search: 'Kenny' });
+      const result = await service.findAllUsers(SALES_SUPPORT_REQUESTER, { search: 'Kenny' });
 
       expect(result.data).toHaveLength(1);
       expect(mockPrisma.$transaction).toHaveBeenCalled();
@@ -645,20 +654,51 @@ describe('AdminService', () => {
     it('ignores blank search strings', async () => {
       mockTransaction(5, Array(5).fill(SAFE_USER));
 
-      const result = await service.findAllUsers({ search: '   ' });
+      const result = await service.findAllUsers(SALES_SUPPORT_REQUESTER, { search: '   ' });
 
-      // Should not throw and should return all users unfiltered
       expect(result.data).toHaveLength(5);
     });
 
-    it('works with no arguments (default empty query)', async () => {
+    it('works with no query argument (default empty query)', async () => {
       mockTransaction(3, [SAFE_USER, SAFE_USER, SAFE_USER]);
 
-      const result = await service.findAllUsers();
+      const result = await service.findAllUsers(SALES_SUPPORT_REQUESTER);
 
       expect(result.data).toHaveLength(3);
       expect(result.meta.page).toBe(1);
       expect(result.meta.limit).toBe(20);
+    });
+
+    // ── SALES_HEAD team scoping ───────────────────────────────────────────────
+
+    it('SALES_HEAD: locks query to their own team (ignores ?team= param)', async () => {
+      mockTransaction(1, [SAFE_USER]);
+
+      // Even though ?team=RADIANT is passed, the BRIGHT head should still see only BRIGHT
+      const result = await service.findAllUsers(
+        SALES_HEAD_REQUESTER,
+        { team: 'RADIANT' as any },
+      );
+
+      expect(result.data).toHaveLength(1);
+      expect(mockPrisma.$transaction).toHaveBeenCalled();
+    });
+
+    it('SALES_HEAD: throws ForbiddenException when no team is assigned on their account', async () => {
+      mockTransaction(0, []);
+      const noTeamSalesHead: JwtPayload = { ...SALES_HEAD_REQUESTER, team: undefined as any };
+
+      await expect(
+        service.findAllUsers(noTeamSalesHead),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('SALES_HEAD: returns results without calling $transaction after ForbiddenException', async () => {
+      const noTeamSalesHead: JwtPayload = { ...SALES_HEAD_REQUESTER, team: undefined as any };
+
+      await expect(service.findAllUsers(noTeamSalesHead)).rejects.toThrow(ForbiddenException);
+
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
     });
   });
 
@@ -667,10 +707,10 @@ describe('AdminService', () => {
   // ══════════════════════════════════════════════════════════════════════════
 
   describe('findUserById()', () => {
-    it('returns the user when found', async () => {
+    it('returns the user when found (SALES_SUPPORT requester)', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(SAFE_USER);
 
-      const result = await service.findUserById('user-id');
+      const result = await service.findUserById('user-id', SALES_SUPPORT_REQUESTER);
 
       expect(result).toEqual(SAFE_USER);
       expect(mockPrisma.user.findUnique).toHaveBeenCalledWith(
@@ -681,17 +721,50 @@ describe('AdminService', () => {
     it('throws NotFoundException when user does not exist', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(null);
 
-      await expect(service.findUserById('nonexistent')).rejects.toThrow(
+      await expect(service.findUserById('nonexistent', SALES_SUPPORT_REQUESTER)).rejects.toThrow(
         NotFoundException,
       );
     });
 
     it('never selects passwordHash', async () => {
       mockPrisma.user.findUnique.mockResolvedValue(SAFE_USER);
-      await service.findUserById('user-id');
+      await service.findUserById('user-id', SALES_SUPPORT_REQUESTER);
 
       const selectArg = mockPrisma.user.findUnique.mock.calls[0][0].select;
       expect(selectArg.passwordHash).toBeUndefined();
+    });
+
+    // ── SALES_HEAD cross-team restriction ─────────────────────────────────────
+
+    it('SALES_HEAD: returns a user that belongs to their own team', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue({ ...SAFE_USER, team: 'BRIGHT' });
+
+      const result = await service.findUserById('user-id', SALES_HEAD_REQUESTER);
+
+      expect(result).toBeDefined();
+    });
+
+    it('SALES_HEAD: throws ForbiddenException when fetching a user from a different team', async () => {
+      mockPrisma.user.findUnique.mockResolvedValue(SAFE_USER_RADIANT);
+
+      await expect(
+        service.findUserById('radiant-user-id', SALES_HEAD_REQUESTER),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('SALES_HEAD (RADIANT): can fetch their own team member but not BRIGHT members', async () => {
+      // Should succeed for a RADIANT user
+      const radiantUser = { ...SAFE_USER, id: 'rad-1', team: 'RADIANT' };
+      mockPrisma.user.findUnique.mockResolvedValueOnce(radiantUser);
+
+      const result = await service.findUserById('rad-1', SALES_HEAD_RADIANT);
+      expect(result).toBeDefined();
+
+      // Should fail for a BRIGHT user
+      mockPrisma.user.findUnique.mockResolvedValueOnce(SAFE_USER); // team: BRIGHT
+      await expect(
+        service.findUserById('user-id', SALES_HEAD_RADIANT),
+      ).rejects.toThrow(ForbiddenException);
     });
   });
 
@@ -1181,6 +1254,321 @@ describe('AdminService', () => {
       await expect(service.getInvite('expired-token')).rejects.toThrow(
         BadRequestException,
       );
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // findOutOfRegionRequests()
+  // ══════════════════════════════════════════════════════════════════════════
+
+  describe('findOutOfRegionRequests()', () => {
+    const OOR_REQUEST = {
+      id:        'oor-id-1',
+      status:    'PENDING',
+      note:      null,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+      customer: {
+        id:           'cust-id',
+        businessName: 'ABC Stores',
+        region:       'SS1',
+        state:        'Cross River',
+      },
+      requester: {
+        id:          'user-id',
+        fullName:    'Kenny Solape',
+        employeeRef: 'Dar-00000001',
+        role:        'MERCHANDISER',
+        roleLabel:   'Merchandiser',
+        team:        'BRIGHT',
+        region:      'SS1',
+      },
+      approver: null,
+    };
+
+    const mockOorTransaction = (total: number, requests: typeof OOR_REQUEST[]) => {
+      mockPrisma.$transaction.mockResolvedValue([total, requests]);
+    };
+
+    // ── Return shape ──────────────────────────────────────────────────────────
+
+    it('returns a paginated { data, meta } shape', async () => {
+      mockOorTransaction(1, [OOR_REQUEST]);
+
+      const result = await service.findOutOfRegionRequests(SALES_SUPPORT_REQUESTER);
+
+      expect(result).toEqual({
+        data: [OOR_REQUEST],
+        meta: { total: 1, page: 1, limit: 20, totalPages: 1 },
+      });
+    });
+
+    it('returns empty data array and correct meta when no requests exist', async () => {
+      mockOorTransaction(0, []);
+
+      const result = await service.findOutOfRegionRequests(SALES_SUPPORT_REQUESTER);
+
+      expect(result.data).toEqual([]);
+      expect(result.meta.total).toBe(0);
+      expect(result.meta.totalPages).toBe(0);
+    });
+
+    it('defaults to page 1 and limit 20', async () => {
+      mockOorTransaction(0, []);
+
+      const result = await service.findOutOfRegionRequests(SALES_SUPPORT_REQUESTER);
+
+      expect(result.meta.page).toBe(1);
+      expect(result.meta.limit).toBe(20);
+    });
+
+    // ── Status filter ─────────────────────────────────────────────────────────
+
+    it('filters by status when provided', async () => {
+      mockOorTransaction(1, [OOR_REQUEST]);
+
+      const result = await service.findOutOfRegionRequests(
+        SALES_SUPPORT_REQUESTER,
+        { status: 'PENDING' as any },
+      );
+
+      expect(result.data).toHaveLength(1);
+      expect(mockPrisma.$transaction).toHaveBeenCalled();
+    });
+
+    it('does not apply status filter when omitted', async () => {
+      mockOorTransaction(3, [OOR_REQUEST, OOR_REQUEST, OOR_REQUEST]);
+
+      const result = await service.findOutOfRegionRequests(SALES_SUPPORT_REQUESTER, {});
+
+      expect(result.data).toHaveLength(3);
+      expect(mockPrisma.$transaction).toHaveBeenCalled();
+    });
+
+    // ── Pagination ────────────────────────────────────────────────────────────
+
+    it('respects custom page and limit', async () => {
+      mockOorTransaction(50, [OOR_REQUEST]);
+
+      const result = await service.findOutOfRegionRequests(
+        SALES_SUPPORT_REQUESTER,
+        { page: 2, limit: 10 },
+      );
+
+      expect(result.meta.page).toBe(2);
+      expect(result.meta.limit).toBe(10);
+      expect(result.meta.totalPages).toBe(5);
+    });
+
+    it('caps limit at 100', async () => {
+      mockOorTransaction(0, []);
+
+      const result = await service.findOutOfRegionRequests(
+        SALES_SUPPORT_REQUESTER,
+        { limit: 9999 },
+      );
+
+      expect(result.meta.limit).toBe(100);
+    });
+
+    // ── SALES_HEAD team scoping ───────────────────────────────────────────────
+
+    it('SALES_SUPPORT: sees all requests regardless of team', async () => {
+      mockOorTransaction(5, Array(5).fill(OOR_REQUEST));
+
+      const result = await service.findOutOfRegionRequests(SALES_SUPPORT_REQUESTER);
+
+      expect(result.data).toHaveLength(5);
+      expect(mockPrisma.$transaction).toHaveBeenCalled();
+    });
+
+    it('SALES_HEAD: scopes results to their team (transaction still called)', async () => {
+      const brightRequest = {
+        ...OOR_REQUEST,
+        requester: { ...OOR_REQUEST.requester, team: 'BRIGHT' },
+      };
+      mockOorTransaction(1, [brightRequest]);
+
+      const result = await service.findOutOfRegionRequests(SALES_HEAD_REQUESTER);
+
+      expect(result.data).toHaveLength(1);
+      expect(mockPrisma.$transaction).toHaveBeenCalled();
+    });
+
+    it('SALES_HEAD: throws ForbiddenException when no team assigned', async () => {
+      const noTeamSalesHead: JwtPayload = { ...SALES_HEAD_REQUESTER, team: undefined as any };
+
+      await expect(
+        service.findOutOfRegionRequests(noTeamSalesHead),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(mockPrisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  // ══════════════════════════════════════════════════════════════════════════
+  // resolveOutOfRegionRequest()
+  // ══════════════════════════════════════════════════════════════════════════
+
+  describe('resolveOutOfRegionRequest()', () => {
+    const PENDING_REQUEST = {
+      id:        'oor-id-1',
+      status:    'PENDING',
+      requester: { team: 'BRIGHT' },
+    };
+
+    const APPROVED_RESULT = {
+      id:        'oor-id-1',
+      status:    'APPROVED',
+      note:      null,
+      updatedAt: new Date(),
+      approver: {
+        id:        'admin-uuid',
+        fullName:  'Admin User',
+        roleLabel: 'Sales Support',
+      },
+    };
+
+    it('approves a PENDING request and returns updated record', async () => {
+      mockPrisma.outOfRegionRequest.findUnique.mockResolvedValue(PENDING_REQUEST);
+      mockPrisma.outOfRegionRequest.update.mockResolvedValue(APPROVED_RESULT);
+
+      const result = await service.resolveOutOfRegionRequest(
+        'oor-id-1',
+        SALES_SUPPORT_REQUESTER,
+        'approve',
+      );
+
+      expect(result.status).toBe('APPROVED');
+      expect(mockPrisma.outOfRegionRequest.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'oor-id-1' },
+          data: expect.objectContaining({
+            status:     'APPROVED',
+            approvedBy: SALES_SUPPORT_REQUESTER.sub,
+          }),
+        }),
+      );
+    });
+
+    it('rejects a PENDING request and returns updated record', async () => {
+      mockPrisma.outOfRegionRequest.findUnique.mockResolvedValue(PENDING_REQUEST);
+      mockPrisma.outOfRegionRequest.update.mockResolvedValue({
+        ...APPROVED_RESULT,
+        status: 'REJECTED',
+      });
+
+      const result = await service.resolveOutOfRegionRequest(
+        'oor-id-1',
+        SALES_SUPPORT_REQUESTER,
+        'reject',
+        'Out of scope area',
+      );
+
+      expect(result.status).toBe('REJECTED');
+      expect(mockPrisma.outOfRegionRequest.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            status: 'REJECTED',
+            note:   'Out of scope area',
+          }),
+        }),
+      );
+    });
+
+    it('throws NotFoundException when request does not exist', async () => {
+      mockPrisma.outOfRegionRequest.findUnique.mockResolvedValue(null);
+
+      await expect(
+        service.resolveOutOfRegionRequest('nonexistent', SALES_SUPPORT_REQUESTER, 'approve'),
+      ).rejects.toThrow(NotFoundException);
+
+      expect(mockPrisma.outOfRegionRequest.update).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when request is already APPROVED', async () => {
+      mockPrisma.outOfRegionRequest.findUnique.mockResolvedValue({
+        ...PENDING_REQUEST,
+        status: 'APPROVED',
+      });
+
+      await expect(
+        service.resolveOutOfRegionRequest('oor-id-1', SALES_SUPPORT_REQUESTER, 'approve'),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(mockPrisma.outOfRegionRequest.update).not.toHaveBeenCalled();
+    });
+
+    it('throws BadRequestException when request is already REJECTED', async () => {
+      mockPrisma.outOfRegionRequest.findUnique.mockResolvedValue({
+        ...PENDING_REQUEST,
+        status: 'REJECTED',
+      });
+
+      await expect(
+        service.resolveOutOfRegionRequest('oor-id-1', SALES_SUPPORT_REQUESTER, 'reject'),
+      ).rejects.toThrow(BadRequestException);
+
+      expect(mockPrisma.outOfRegionRequest.update).not.toHaveBeenCalled();
+    });
+
+    it('SALES_HEAD: can approve a request from their own team', async () => {
+      mockPrisma.outOfRegionRequest.findUnique.mockResolvedValue(PENDING_REQUEST); // team: BRIGHT
+      mockPrisma.outOfRegionRequest.update.mockResolvedValue(APPROVED_RESULT);
+
+      const result = await service.resolveOutOfRegionRequest(
+        'oor-id-1',
+        SALES_HEAD_REQUESTER, // team: BRIGHT
+        'approve',
+      );
+
+      expect(result.status).toBe('APPROVED');
+    });
+
+    it('SALES_HEAD: throws ForbiddenException when acting on a request from a different team', async () => {
+      mockPrisma.outOfRegionRequest.findUnique.mockResolvedValue({
+        ...PENDING_REQUEST,
+        requester: { team: 'RADIANT' }, // different team
+      });
+
+      await expect(
+        service.resolveOutOfRegionRequest(
+          'oor-id-1',
+          SALES_HEAD_REQUESTER, // team: BRIGHT
+          'approve',
+        ),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(mockPrisma.outOfRegionRequest.update).not.toHaveBeenCalled();
+    });
+
+    it('sets approvedBy to the requester sub on approve', async () => {
+      mockPrisma.outOfRegionRequest.findUnique.mockResolvedValue(PENDING_REQUEST);
+      mockPrisma.outOfRegionRequest.update.mockResolvedValue(APPROVED_RESULT);
+
+      await service.resolveOutOfRegionRequest(
+        'oor-id-1',
+        SALES_SUPPORT_REQUESTER,
+        'approve',
+      );
+
+      const updateData = mockPrisma.outOfRegionRequest.update.mock.calls[0][0].data;
+      expect(updateData.approvedBy).toBe(SALES_SUPPORT_REQUESTER.sub);
+    });
+
+    it('does not include note in update data when note is undefined', async () => {
+      mockPrisma.outOfRegionRequest.findUnique.mockResolvedValue(PENDING_REQUEST);
+      mockPrisma.outOfRegionRequest.update.mockResolvedValue(APPROVED_RESULT);
+
+      await service.resolveOutOfRegionRequest(
+        'oor-id-1',
+        SALES_SUPPORT_REQUESTER,
+        'approve',
+        // no note passed
+      );
+
+      const updateData = mockPrisma.outOfRegionRequest.update.mock.calls[0][0].data;
+      expect(updateData.note).toBeUndefined();
     });
   });
 });

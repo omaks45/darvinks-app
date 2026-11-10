@@ -1,3 +1,4 @@
+// src/modules/admin/admin.controller.ts
 import {
   Body,
   Controller,
@@ -20,7 +21,7 @@ import {
   ApiResponse,
   ApiTags,
 } from '@nestjs/swagger';
-import { Region, Team, UserRole, UserTier } from '@prisma/client';
+import { ApprovalStatus, Region, Team, UserRole, UserTier } from '@prisma/client';
 
 import { JwtAuthGuard } from '@common/guards/jwt-auth.guard';
 import { RolesGuard } from '@common/guards/roles.guard';
@@ -28,7 +29,7 @@ import { Roles } from '@common/decorators/roles.decorator';
 import { CurrentUser } from '@common/decorators/current-user.decorator';
 import type { JwtPayload } from '@modules/auths/strategies/jwt.strategies';
 import { AdminService } from './admin.service';
-import type { FindAllUsersQuery } from './admin.service';
+import type { FindAllUsersQuery, FindOutOfRegionQuery } from './admin.service';
 
 import { ProvisionUserDto, ProvisionUserResponse } from '../auths/dto/provision-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -113,109 +114,12 @@ A **12-character temporary password** is auto-generated and emailed to the new u
 The user **must change their password on first login** (\`mustChangePassword: true\`).
     `,
   })
-  @ApiBody({
-    type: ProvisionUserDto,
-    description: 'Provision payload',
-    examples: {
-      salesHead: {
-        summary: 'Provisioning a Sales Head',
-        value: {
-          fullName: 'Chukwuemeka Obi',
-          email: 'emeka.obi@darvinks.com',
-          phone: '+2348055555555',
-          role: 'SALES_HEAD',
-          team: 'BRIGHT',
-          dateOfBirth: '1982-03-10',
-        },
-      },
-      warehouseAdmin: {
-        summary: 'Provisioning a Warehouse Admin',
-        value: {
-          fullName: 'Adaeze Okonkwo',
-          email: 'adaeze@darvinks.com',
-          phone: '+2348066666666',
-          role: 'WAREHOUSE_ADMIN',
-          warehouseLocation: 'LAGOS_HQ',
-        },
-      },
-      gm: {
-        summary: 'Provisioning the General Manager',
-        value: {
-          fullName: 'Dr. Emeka Darvinks',
-          email: 'gm@darvinks.com',
-          phone: '+2348077777777',
-          role: 'GENERAL_MANAGER',
-        },
-      },
-      systemAdmin: {
-        summary: 'Provisioning a System Administrator',
-        value: {
-          fullName: 'Ngozi Admin',
-          email: 'admin@darvinks.com',
-          phone: '+2348088888888',
-          role: 'SYSTEM_ADMIN',
-        },
-      },
-    },
-  })
-  @ApiResponse({
-    status: 201,
-    description: ' Account provisioned — temporary password returned once. Share securely with the new user.',
-    schema: {
-      example: {
-        success: true,
-        data: {
-          userId: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890',
-          employeeRef: 'Dar-00000006',
-          temporaryPassword: 'Xk9#mNpQ2v7B',
-          message: 'Account created for Adaeze Okonkwo. A welcome email with login instructions has been sent to adaeze@darvinks.com.',
-        },
-        timestamp: '2026-04-15T08:30:00.000Z',
-      },
-    },
-  })
-  @ApiResponse({
-    status: 400,
-    description: ' Validation error',
-    schema: {
-      examples: {
-        missingSalesHeadTeam: {
-          summary: 'Sales Head without team',
-          value: { statusCode: 400, message: 'A Sales Head must be assigned to a team (BRIGHT or RADIANT)', error: 'Bad Request', path: '/api/v1/admin/users/provision', timestamp: '2026-04-15T08:30:00.000Z' },
-        },
-        missingWarehouseLocation: {
-          summary: 'Warehouse Admin without location',
-          value: { statusCode: 400, message: 'A Warehouse Administrator must be assigned to a warehouse location', error: 'Bad Request', path: '/api/v1/admin/users/provision', timestamp: '2026-04-15T08:30:00.000Z' },
-        },
-        fieldStaffRole: {
-          summary: 'Attempting to provision a field staff role',
-          value: { statusCode: 400, message: 'Role MERCHANDISER cannot be provisioned. Field staff (Tiers 1–4) must self-register via the mobile app.', error: 'Bad Request', path: '/api/v1/admin/users/provision', timestamp: '2026-04-15T08:30:00.000Z' },
-        },
-      },
-    },
-  })
-  @ApiResponse({
-    status: 409,
-    description: ' Conflict — duplicate email/phone or role slot already filled',
-    schema: {
-      examples: {
-        duplicateEmail: {
-          summary: 'Email already registered',
-          value: { statusCode: 409, message: 'A user with this email already exists', error: 'Conflict', path: '/api/v1/admin/users/provision', timestamp: '2026-04-15T08:30:00.000Z' },
-        },
-        salesHeadExists: {
-          summary: 'Sales Head slot already filled',
-          value: { statusCode: 409, message: 'Team BRIGHT already has an active Sales Head (Chukwuemeka Obi). Deactivate the existing account first.', error: 'Conflict', path: '/api/v1/admin/users/provision', timestamp: '2026-04-15T08:30:00.000Z' },
-        },
-        warehouseAdminExists: {
-          summary: 'Warehouse admin slot already filled',
-          value: { statusCode: 409, message: 'Warehouse LAGOS_HQ already has an active admin (Adaeze Okonkwo). Deactivate the existing account first.', error: 'Conflict', path: '/api/v1/admin/users/provision', timestamp: '2026-04-15T08:30:00.000Z' },
-        },
-      },
-    },
-  })
-  @ApiResponse({ status: 401, description: ' Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
-  @ApiResponse({ status: 403, description: ' Only System Admin can access this endpoint', schema: { example: FORBIDDEN_EXAMPLE } })
+  @ApiBody({ type: ProvisionUserDto })
+  @ApiResponse({ status: 201, description: 'Account provisioned' })
+  @ApiResponse({ status: 400, description: 'Validation error' })
+  @ApiResponse({ status: 409, description: 'Conflict — duplicate email/phone or role slot already filled' })
+  @ApiResponse({ status: 401, description: 'Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
+  @ApiResponse({ status: 403, description: 'Only System Admin can access this endpoint', schema: { example: FORBIDDEN_EXAMPLE } })
   async provisionUser(
     @CurrentUser() requester: JwtPayload,
     @Body() dto: ProvisionUserDto,
@@ -224,24 +128,34 @@ The user **must change their password on first login** (\`mustChangePassword: tr
   }
 
   // ─── GET /admin/users ──────────────────────────────────────────────────────
+  //
+  // SALES_HEAD callers are automatically scoped to their team — they cannot
+  // see users from the other team. The team restriction is applied in the
+  // service, not here, so it cannot be bypassed via query params.
 
   @Get('users')
+  @Roles(
+    UserTier.TIER5_SALES_SUPPORT,
+    UserTier.TIER5_SALES_HEAD,
+  )
   @ApiOperation({
     summary: 'List all users with optional filters',
     description: `
-Returns users in the system with optional filtering and pagination. Password hashes are never returned.
+Returns users with optional filtering and pagination. Password hashes are never returned.
+
+**Team scoping:** A Sales Head (TIER5_SALES_HEAD) will only ever see users from **their own team**, regardless of any \`?team=\` query param they pass. The restriction is enforced server-side.
 
 **Filter options:**
-- \`team\` — filter by team (BRIGHT or RADIANT)
+- \`team\` — filter by team (BRIGHT or RADIANT) — ignored for Sales Head callers
 - \`region\` — filter by region code
 - \`role\` — filter by exact role enum value
-- \`tier\` — filter by tier (e.g. TIER1, TIER5_SALES_HEAD)
+- \`tier\` — filter by tier
 - \`search\` — case-insensitive search across full name, email, and employee ref
 - \`isActive\` — filter by active status (true / false)
 - \`page\` / \`limit\` — pagination (default: page 1, 20 per page; max limit: 100)
     `,
   })
-  @ApiQuery({ name: 'team',     required: false, enum: Team,     description: 'Filter by team' })
+  @ApiQuery({ name: 'team',     required: false, enum: Team,     description: 'Filter by team (ignored for Sales Head — always locked to their team)' })
   @ApiQuery({ name: 'region',   required: false, enum: Region,   description: 'Filter by region' })
   @ApiQuery({ name: 'role',     required: false, enum: UserRole, description: 'Filter by role' })
   @ApiQuery({ name: 'tier',     required: false, enum: UserTier, description: 'Filter by tier' })
@@ -249,93 +163,49 @@ Returns users in the system with optional filtering and pagination. Password has
   @ApiQuery({ name: 'isActive', required: false, type: Boolean,  description: 'Filter by active status' })
   @ApiQuery({ name: 'page',     required: false, type: Number,   description: 'Page number (default: 1)' })
   @ApiQuery({ name: 'limit',    required: false, type: Number,   description: 'Results per page (default: 20, max: 100)' })
-  @ApiResponse({
-    status: 200,
-    description: ' Paginated user list',
-    schema: {
-      example: {
-        success: true,
-        data: {
-          data: [USER_EXAMPLE],
-          meta: { total: 1, page: 1, limit: 20, totalPages: 1 },
-        },
-        timestamp: '2026-04-15T08:30:00.000Z',
-      },
-    },
-  })
-  @ApiResponse({ status: 401, description: ' Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
-  @ApiResponse({ status: 403, description: ' Insufficient permissions', schema: { example: FORBIDDEN_EXAMPLE } })
-  findAllUsers(@Query() query: FindAllUsersQuery) {
-    return this.adminService.findAllUsers(query);
+  @ApiResponse({ status: 200, description: 'Paginated user list' })
+  @ApiResponse({ status: 401, description: 'Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
+  @ApiResponse({ status: 403, description: 'Insufficient permissions', schema: { example: FORBIDDEN_EXAMPLE } })
+  findAllUsers(
+    @CurrentUser() requester: JwtPayload,
+    @Query() query: FindAllUsersQuery,
+  ) {
+    return this.adminService.findAllUsers(requester, query);
   }
 
   // ─── GET /admin/users/:id ──────────────────────────────────────────────────
 
   @Get('users/:id')
+  @Roles(
+    UserTier.TIER5_SALES_SUPPORT,
+    UserTier.TIER5_SALES_HEAD,
+  )
   @ApiOperation({
     summary: 'Get a single user by ID',
-    description: 'Returns the full profile of one user by their UUID.',
+    description: 'Returns the full profile of one user. Sales Head callers will receive 403 if the user belongs to a different team.',
   })
-  @ApiParam({ name: 'id', description: 'User UUID', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
-  @ApiResponse({
-    status: 200,
-    description: ' User profile returned',
-    schema: { example: { success: true, data: USER_EXAMPLE, timestamp: '2026-04-15T08:30:00.000Z' } },
-  })
-  @ApiResponse({ status: 404, description: ' User not found', schema: { example: NOT_FOUND_EXAMPLE } })
-  @ApiResponse({ status: 401, description: ' Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
-  @ApiResponse({ status: 403, description: ' Insufficient permissions', schema: { example: FORBIDDEN_EXAMPLE } })
-  findUser(@Param('id') id: string) {
-    return this.adminService.findUserById(id);
+  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'User profile returned', schema: { example: { success: true, data: USER_EXAMPLE } } })
+  @ApiResponse({ status: 403, description: 'Sales Head attempting to view a user outside their team', schema: { example: FORBIDDEN_EXAMPLE } })
+  @ApiResponse({ status: 404, description: 'User not found', schema: { example: NOT_FOUND_EXAMPLE } })
+  @ApiResponse({ status: 401, description: 'Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
+  findUser(
+    @Param('id') id: string,
+    @CurrentUser() requester: JwtPayload,
+  ) {
+    return this.adminService.findUserById(id, requester);
   }
 
   // ─── PATCH /admin/users/:id ────────────────────────────────────────────────
 
   @Patch('users/:id')
-  @ApiOperation({
-    summary: 'Update a user account',
-    description: `
-Updates one or more fields on a user account. All fields are optional — only send what needs changing.
-
-**Field rules:**
-- \`team\` — only meaningful for Sales Head. Changing team on other roles has no effect.
-- \`warehouseLocation\` — only meaningful for Warehouse Admin.
-- \`annualTargets\` — merges with existing targets. Format: \`{ "LOTION": 500, "SOAP": 300 }\`.
-- \`fcmToken\` — normally updated automatically by the mobile app on login; only set manually if needed.
-    `,
-  })
-  @ApiParam({ name: 'id', description: 'User UUID', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
-  @ApiBody({
-    type: UpdateUserDto,
-    examples: {
-      updateName: {
-        summary: 'Update full name',
-        value: { fullName: 'Kenny Solape Jr.' },
-      },
-      updateTargets: {
-        summary: 'Update annual targets',
-        value: { annualTargets: { LOTION: 600, SOAP: 400, CREAM: 250, MAINTENANCE: 120 } },
-      },
-      updateWarehouse: {
-        summary: 'Reassign warehouse admin to different location',
-        value: { warehouseLocation: 'ONITSHA' },
-      },
-    },
-  })
-  @ApiResponse({
-    status: 200,
-    description: ' User updated — full updated profile returned',
-    schema: {
-      example: {
-        success: true,
-        data: { ...USER_EXAMPLE, fullName: 'Kenny Solape Jr.', updatedAt: '2026-04-16T10:00:00.000Z' },
-        timestamp: '2026-04-16T10:00:00.000Z',
-      },
-    },
-  })
-  @ApiResponse({ status: 404, description: ' User not found', schema: { example: NOT_FOUND_EXAMPLE } })
-  @ApiResponse({ status: 401, description: ' Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
-  @ApiResponse({ status: 403, description: ' Insufficient permissions', schema: { example: FORBIDDEN_EXAMPLE } })
+  @ApiOperation({ summary: 'Update a user account' })
+  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiBody({ type: UpdateUserDto })
+  @ApiResponse({ status: 200, description: 'User updated' })
+  @ApiResponse({ status: 404, description: 'User not found', schema: { example: NOT_FOUND_EXAMPLE } })
+  @ApiResponse({ status: 401, description: 'Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
+  @ApiResponse({ status: 403, description: 'Insufficient permissions', schema: { example: FORBIDDEN_EXAMPLE } })
   updateUser(
     @Param('id') id: string,
     @Body() dto: UpdateUserDto,
@@ -347,50 +217,13 @@ Updates one or more fields on a user account. All fields are optional — only s
 
   @Patch('users/:id/deactivate')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Deactivate a user account',
-    description: `
-Sets \`isActive: false\` — the user can no longer log in and all active sessions are revoked immediately.
-
-**Use cases:**
-- Staff departure or role change
-- Security incident
-- Before provisioning a replacement Sales Head or Warehouse Admin for the same slot
-
-**Note:** You cannot deactivate your own account via this endpoint.
-    `,
-  })
-  @ApiParam({ name: 'id', description: 'User UUID', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
-  @ApiResponse({
-    status: 200,
-    description: ' Account deactivated — all sessions revoked',
-    schema: {
-      example: {
-        success: true,
-        data: { ...USER_EXAMPLE, isActive: false, updatedAt: '2026-04-16T10:00:00.000Z' },
-        timestamp: '2026-04-16T10:00:00.000Z',
-      },
-    },
-  })
-  @ApiResponse({
-    status: 400,
-    description: ' Cannot deactivate — account already inactive or self-deactivation attempt',
-    schema: {
-      examples: {
-        alreadyInactive: {
-          summary: 'Already deactivated',
-          value: { statusCode: 400, message: "Kenny Solape's account is already deactivated", error: 'Bad Request', path: '/api/v1/admin/users/uuid/deactivate', timestamp: '2026-04-15T08:30:00.000Z' },
-        },
-        selfDeactivation: {
-          summary: 'Trying to deactivate own account',
-          value: { statusCode: 400, message: 'You cannot deactivate your own account', error: 'Bad Request', path: '/api/v1/admin/users/uuid/deactivate', timestamp: '2026-04-15T08:30:00.000Z' },
-        },
-      },
-    },
-  })
-  @ApiResponse({ status: 404, description: ' User not found', schema: { example: NOT_FOUND_EXAMPLE } })
-  @ApiResponse({ status: 401, description: ' Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
-  @ApiResponse({ status: 403, description: ' Insufficient permissions', schema: { example: FORBIDDEN_EXAMPLE } })
+  @ApiOperation({ summary: 'Deactivate a user account' })
+  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Account deactivated' })
+  @ApiResponse({ status: 400, description: 'Already inactive or self-deactivation attempt' })
+  @ApiResponse({ status: 404, description: 'User not found', schema: { example: NOT_FOUND_EXAMPLE } })
+  @ApiResponse({ status: 401, description: 'Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
+  @ApiResponse({ status: 403, description: 'Insufficient permissions', schema: { example: FORBIDDEN_EXAMPLE } })
   deactivateUser(
     @Param('id') id: string,
     @CurrentUser() requester: JwtPayload,
@@ -402,31 +235,12 @@ Sets \`isActive: false\` — the user can no longer log in and all active sessio
 
   @Patch('users/:id/reactivate')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: 'Reactivate a user account',
-    description: 'Restores access for a previously deactivated account. The user will need to log in again to get a new token pair.',
-  })
-  @ApiParam({ name: 'id', description: 'User UUID', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
-  @ApiResponse({
-    status: 200,
-    description: ' Account reactivated',
-    schema: {
-      example: {
-        success: true,
-        data: { ...USER_EXAMPLE, isActive: true, updatedAt: '2026-04-16T10:00:00.000Z' },
-        timestamp: '2026-04-16T10:00:00.000Z',
-      },
-    },
-  })
-  @ApiResponse({
-    status: 400,
-    description: ' Account is already active',
-    schema: {
-      example: { statusCode: 400, message: "Kenny Solape's account is already active", error: 'Bad Request', path: '/api/v1/admin/users/uuid/reactivate', timestamp: '2026-04-15T08:30:00.000Z' },
-    },
-  })
-  @ApiResponse({ status: 404, description: ' User not found', schema: { example: NOT_FOUND_EXAMPLE } })
-  @ApiResponse({ status: 401, description: ' Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
+  @ApiOperation({ summary: 'Reactivate a user account' })
+  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Account reactivated' })
+  @ApiResponse({ status: 400, description: 'Account is already active' })
+  @ApiResponse({ status: 404, description: 'User not found', schema: { example: NOT_FOUND_EXAMPLE } })
+  @ApiResponse({ status: 401, description: 'Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
   reactivateUser(@Param('id') id: string) {
     return this.adminService.reactivateUser(id);
   }
@@ -435,31 +249,12 @@ Sets \`isActive: false\` — the user can no longer log in and all active sessio
 
   @Post('users/:id/reset-password')
   @HttpCode(HttpStatus.OK)
-  @ApiOperation({
-    summary: "Reset a user's password",
-    description: `
-Generates a new 12-character temporary password, emails it to the user, and:
-- Sets \`mustChangePassword: true\` — user must change it on next login
-- Revokes **all** active refresh tokens — the user is logged out of all devices
-
-**Use when:** a user forgot their password, their account was compromised, or you need to force a re-login.
-    `,
-  })
-  @ApiParam({ name: 'id', description: 'User UUID', example: 'a1b2c3d4-e5f6-7890-abcd-ef1234567890' })
-  @ApiResponse({
-    status: 200,
-    description: ' Password reset — temporary password emailed, all sessions revoked',
-    schema: {
-      example: {
-        success: true,
-        data: { message: 'Password reset email sent to kenny.solape@darvinks.com. All active sessions have been revoked.' },
-        timestamp: '2026-04-15T08:30:00.000Z',
-      },
-    },
-  })
-  @ApiResponse({ status: 404, description: ' User not found', schema: { example: NOT_FOUND_EXAMPLE } })
-  @ApiResponse({ status: 401, description: ' Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
-  @ApiResponse({ status: 403, description: ' Insufficient permissions', schema: { example: FORBIDDEN_EXAMPLE } })
+  @ApiOperation({ summary: "Reset a user's password" })
+  @ApiParam({ name: 'id', description: 'User UUID' })
+  @ApiResponse({ status: 200, description: 'Password reset — temporary password emailed, all sessions revoked' })
+  @ApiResponse({ status: 404, description: 'User not found', schema: { example: NOT_FOUND_EXAMPLE } })
+  @ApiResponse({ status: 401, description: 'Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
+  @ApiResponse({ status: 403, description: 'Insufficient permissions', schema: { example: FORBIDDEN_EXAMPLE } })
   resetUserPassword(@Param('id') id: string) {
     return this.adminService.resetUserPassword(id);
   }
@@ -467,37 +262,10 @@ Generates a new 12-character temporary password, emails it to the user, and:
   // ─── GET /admin/provisioned ────────────────────────────────────────────────
 
   @Get('provisioned')
-  @ApiOperation({
-    summary: 'List all provisioned back-office accounts',
-    description: 'Returns only accounts created via admin provisioning: Sales Head, System Admin, Warehouse Admin, and General Manager. Useful for auditing who created which back-office account.',
-  })
-  @ApiResponse({
-    status: 200,
-    description: ' Provisioned accounts returned',
-    schema: {
-      example: {
-        success: true,
-        data: [
-          {
-            ...USER_EXAMPLE,
-            role: 'WAREHOUSE_ADMIN',
-            roleLabel: 'Warehouse Administrator',
-            tier: 'TIER5_WAREHOUSE',
-            team: null,
-            region: null,
-            state: null,
-            warehouseLocation: 'LAGOS_HQ',
-            accountOrigin: 'PROVISIONED',
-            mustChangePassword: false,
-            provisionedById: 'system-admin-uuid',
-          },
-        ],
-        timestamp: '2026-04-15T08:30:00.000Z',
-      },
-    },
-  })
-  @ApiResponse({ status: 401, description: ' Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
-  @ApiResponse({ status: 403, description: ' Insufficient permissions', schema: { example: FORBIDDEN_EXAMPLE } })
+  @ApiOperation({ summary: 'List all provisioned back-office accounts' })
+  @ApiResponse({ status: 200, description: 'Provisioned accounts returned' })
+  @ApiResponse({ status: 401, description: 'Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
+  @ApiResponse({ status: 403, description: 'Insufficient permissions', schema: { example: FORBIDDEN_EXAMPLE } })
   findProvisionedUsers() {
     return this.adminService.findProvisionedUsers();
   }
@@ -513,98 +281,11 @@ Generates a new 12-character temporary password, emails it to the user, and:
     UserTier.TIER3,
     UserTier.TIER2,
   )
-  @ApiOperation({
-    summary: 'Create and send a field agent registration invite',
-    description: `
-Generates a secure **48-hour invite token**, emails it to the invitee, and returns the token details.
-
-The role and team are **locked to the invite** — the invitee cannot change them during registration.
-
----
-
-### Who can call this endpoint and what roles they can invite
-
-| Caller's Role | Roles They Can Invite |
-|---|---|
-| **Sales Head** (TIER5_SALES_HEAD) | \`ZONAL_SALES_MANAGER\` |
-| **Zonal Sales Manager** (TIER4) | \`TERRITORY_SALES_MANAGER\` and similar TIER3 roles |
-| **Territory Sales Manager** (TIER3) | \`AREA_TERRITORY_SALES_MANAGER\` and similar TIER2 roles |
-| **Area Territory Sales Manager** (TIER2) | \`MERCHANDISER\`, \`PROMOTER\`, \`DBSR\`, \`VSR\`, \`SSR\` |
-
->  **TIER5_SALES_SUPPORT** cannot create field invites — 403 will be returned.
-
----
-
-### Key rules
-- **Do NOT send a \`team\` field** — it is automatically inherited from the inviter's account.
-- The \`email\` field in the registration form must be **pre-filled and locked** — any mismatch is rejected.
-- After the invitee registers, their \`reportsToId\` is automatically set to the inviter — no client action needed.
-- The invite expires after **48 hours** and can only be used once.
-    `,
-  })
-  @ApiBody({
-    type: CreateInviteDto,
-    examples: {
-      salesHeadInvitingZSM: {
-        summary: 'Sales Head inviting a Zonal Sales Manager',
-        value: {
-          email: 'adaeze.okonkwo@darvinks.com',
-          role: 'ZONAL_SALES_MANAGER',
-        },
-      },
-      zsmInvitingTSM: {
-        summary: 'Zonal Sales Manager inviting a Territory Sales Manager',
-        value: {
-          email: 'kenny.solape@darvinks.com',
-          role: 'TERRITORY_SALES_MANAGER',
-        },
-      },
-      atsmInvitingMerchandiser: {
-        summary: 'ATSM inviting a Merchandiser (TIER1)',
-        value: {
-          email: 'chioma.okafor@darvinks.com',
-          role: 'MERCHANDISER',
-        },
-      },
-    },
-  })
-  @ApiResponse({
-    status: 201,
-    description: 'Invite created — token emailed to invitee',
-    schema: {
-      example: {
-        inviteToken: '550e8400-e29b-41d4-a716-446655440000',
-        expiresAt: '2026-09-27T13:00:00.000Z',
-        message: 'Invite sent to adaeze.okonkwo@darvinks.com',
-      },
-    },
-  })
-  @ApiResponse({
-    status: 403,
-    description: 'Caller is not permitted to invite the specified role',
-    schema: {
-      example: {
-        statusCode: 403,
-        message: 'As a TIER5_SALES_HEAD you can only invite: ZONAL_SALES_MANAGER. Requested role "MERCHANDISER" is not permitted.',
-        error: 'Forbidden',
-        path: '/api/v1/admin/invites',
-        timestamp: '2026-09-25T12:00:00.000Z',
-      },
-    },
-  })
-  @ApiResponse({
-    status: 409,
-    description: 'An active unused invite already exists for this email',
-    schema: {
-      example: {
-        statusCode: 409,
-        message: 'An active invite already exists for adaeze.okonkwo@darvinks.com. Revoke it first or wait for it to expire.',
-        error: 'Conflict',
-        path: '/api/v1/admin/invites',
-        timestamp: '2026-09-25T12:00:00.000Z',
-      },
-    },
-  })
+  @ApiOperation({ summary: 'Create and send a field agent registration invite' })
+  @ApiBody({ type: CreateInviteDto })
+  @ApiResponse({ status: 201, description: 'Invite created — token emailed to invitee' })
+  @ApiResponse({ status: 403, description: 'Caller is not permitted to invite the specified role' })
+  @ApiResponse({ status: 409, description: 'An account with that email already exists' })
   @ApiResponse({ status: 401, description: 'Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
   async createInvite(
     @CurrentUser() requester: JwtPayload,
@@ -613,4 +294,130 @@ The role and team are **locked to the invite** — the invitee cannot change the
     return this.adminService.createInvite(requester, dto);
   }
 
+  // ─── GET /admin/out-of-region ─────────────────────────────────────────────
+  //
+  // Returns OutOfRegionRequest records.
+  //
+  // Access:
+  //   TIER5_SALES_SUPPORT — sees all requests
+  //   TIER5_SALES_HEAD    — sees only requests from members of their team
+
+  @Get('out-of-region')
+  @Roles(
+    UserTier.TIER5_SALES_SUPPORT,
+    UserTier.TIER5_SALES_HEAD,
+  )
+  @ApiOperation({
+    summary: 'List out-of-region requests',
+    description: `
+Returns all out-of-region visit requests.
+
+**Access rules:**
+- **System Admin (TIER5_SALES_SUPPORT):** sees all requests across both teams.
+- **Sales Head (TIER5_SALES_HEAD):** sees only requests submitted by members of **their own team**.
+
+**Filter options:**
+- \`status\` — filter by approval status: \`PENDING\`, \`APPROVED\`, or \`REJECTED\`
+- \`page\` / \`limit\` — pagination (default: page 1, 20 per page; max: 100)
+    `,
+  })
+  @ApiQuery({ name: 'status', required: false, enum: ApprovalStatus, description: 'Filter by approval status' })
+  @ApiQuery({ name: 'page',   required: false, type: Number,         description: 'Page number (default: 1)' })
+  @ApiQuery({ name: 'limit',  required: false, type: Number,         description: 'Results per page (default: 20, max: 100)' })
+  @ApiResponse({
+    status: 200,
+    description: 'Paginated out-of-region requests',
+    schema: {
+      example: {
+        success: true,
+        data: {
+          data: [
+            {
+              id: 'req-uuid',
+              status: 'PENDING',
+              note: 'Need to visit KD account in Lagos 1',
+              createdAt: '2026-11-01T09:00:00.000Z',
+              updatedAt: '2026-11-01T09:00:00.000Z',
+              customer: {
+                id: 'cust-uuid',
+                businessName: 'Bright Distributors Ltd',
+                region: 'LAGOS_1',
+                state: 'Lagos',
+              },
+              requester: {
+                id: 'user-uuid',
+                fullName: 'Emeka Obi',
+                employeeRef: 'Dar-00000012',
+                role: 'MERCHANDISER',
+                roleLabel: 'Merchandiser',
+                team: 'BRIGHT',
+                region: 'SS1',
+              },
+              approver: null,
+            },
+          ],
+          meta: { total: 1, page: 1, limit: 20, totalPages: 1 },
+        },
+        timestamp: '2026-11-10T10:00:00.000Z',
+      },
+    },
+  })
+  @ApiResponse({ status: 401, description: 'Missing or invalid access token', schema: { example: UNAUTHORIZED_EXAMPLE } })
+  @ApiResponse({ status: 403, description: 'Insufficient permissions', schema: { example: FORBIDDEN_EXAMPLE } })
+  findOutOfRegionRequests(
+    @CurrentUser() requester: JwtPayload,
+    @Query() query: FindOutOfRegionQuery,
+  ) {
+    return this.adminService.findOutOfRegionRequests(requester, query);
+  }
+
+  // ─── PATCH /admin/out-of-region/:id/approve ───────────────────────────────
+
+  @Patch('out-of-region/:id/approve')
+  @HttpCode(HttpStatus.OK)
+  @Roles(
+    UserTier.TIER5_SALES_SUPPORT,
+    UserTier.TIER5_SALES_HEAD,
+  )
+  @ApiOperation({
+    summary: 'Approve an out-of-region request',
+    description: 'Marks the request as APPROVED and records the approver. Sales Head can only approve requests from their own team.',
+  })
+  @ApiParam({ name: 'id', description: 'OutOfRegionRequest UUID' })
+  @ApiResponse({ status: 200, description: 'Request approved' })
+  @ApiResponse({ status: 400, description: 'Request already resolved' })
+  @ApiResponse({ status: 403, description: 'Sales Head attempting to approve a request from another team' })
+  @ApiResponse({ status: 404, description: 'Request not found' })
+  approveOutOfRegionRequest(
+    @Param('id') id: string,
+    @CurrentUser() requester: JwtPayload,
+    @Body('note') note?: string,
+  ) {
+    return this.adminService.resolveOutOfRegionRequest(id, requester, 'approve', note);
+  }
+
+  // ─── PATCH /admin/out-of-region/:id/reject ────────────────────────────────
+
+  @Patch('out-of-region/:id/reject')
+  @HttpCode(HttpStatus.OK)
+  @Roles(
+    UserTier.TIER5_SALES_SUPPORT,
+    UserTier.TIER5_SALES_HEAD,
+  )
+  @ApiOperation({
+    summary: 'Reject an out-of-region request',
+    description: 'Marks the request as REJECTED. Sales Head can only reject requests from their own team.',
+  })
+  @ApiParam({ name: 'id', description: 'OutOfRegionRequest UUID' })
+  @ApiResponse({ status: 200, description: 'Request rejected' })
+  @ApiResponse({ status: 400, description: 'Request already resolved' })
+  @ApiResponse({ status: 403, description: 'Sales Head attempting to reject a request from another team' })
+  @ApiResponse({ status: 404, description: 'Request not found' })
+  rejectOutOfRegionRequest(
+    @Param('id') id: string,
+    @CurrentUser() requester: JwtPayload,
+    @Body('note') note?: string,
+  ) {
+    return this.adminService.resolveOutOfRegionRequest(id, requester, 'reject', note);
+  }
 }
